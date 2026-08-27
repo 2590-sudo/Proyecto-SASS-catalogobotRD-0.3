@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel Admin - WhatsApp SaaS</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { color: #075e54; text-align: center; }
+        .card { border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        input, select, button { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; }
+        button { background: #128c7e; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background: #075e54; }
+        .code-box { font-size: 28px; font-weight: bold; color: #128c7e; text-align: center; margin: 15px 0; letter-spacing: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Administrador de Bots (SaaS)</h1>
+        
+        <div class="card">
+            <h3>Vincular Nuevo Negocio</h3>
+            <input type="text" id="clientId" placeholder="ID del Cliente (ej: colmado_juan)">
+            <input type="text" id="nombreLocal" placeholder="Nombre visible del local (ej: Colmado Los Muchachos)">
+            <input type="text" id="phone" placeholder="Número del cliente (ej: 18091234567 sin +)">
+            <select id="tipoNegocio">
+                <option value="colmado">Colmado / Minimarket</option>
+                <option value="salon">Salón de Belleza / Barbería</option>
+                <option value="tienda">Tienda Genérica</option>
+            </select>
+            <button onclick="connectClient()">Generar Código de 8 Dígitos</button>
+            <div id="pairingCode" class="code-box"></div>
+        </div>
+    </div>
+
+    <script>
+        async function connectClient() {
+            const clientId = document.getElementById('clientId').value.trim();
+            const nombreLocal = document.getElementById('nombreLocal').value.trim();
+            const phone = document.getElementById('phone').value.trim();
+            const tipoNegocio = document.getElementById('tipoNegocio').value;
+            const codeBox = document.getElementById('pairingCode');
+            
+            if(!clientId || !phone || !nombreLocal) return alert('Llena todos los campos');
+            
+            codeBox.innerText = "Generando código... (Espera 3 segundos)";
+            
+            try {
+                const res = await fetch('/api/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clientId, phoneNumber: phone, tipoNegocio, nombreLocal })
+                });
+                const data = await res.json();
+                
+                if(data.success && data.code) {
+                    codeBox.innerText = data.code;
+                } else if(data.message) {
+                    codeBox.innerText = data.message;
+                } else {
+                    codeBox.innerText = "Error: " + data.error;
+                }
+            } catch(e) {
+                codeBox.innerText = "Error de conexión";
+            }
+        }
+    </script>
+</body>
+</html>
