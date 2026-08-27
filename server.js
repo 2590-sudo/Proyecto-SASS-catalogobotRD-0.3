@@ -13,21 +13,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-// Aislamiento File System
-if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
-if (!fs.existsSync('./public/uploads')) fs.mkdirSync('./public/uploads', { recursive: true });
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const clientId = req.params.clientId;
-        const dir = `./public/uploads/${clientId}`;
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-        cb(null, `prod_${Date.now()}${path.extname(file.originalname)}`);
-    }
-});
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 app.use(express.static('public'));
@@ -47,9 +33,10 @@ const configSchema = new mongoose.Schema({
     clientId: { type: String, unique: true },
     tipo: String,
     nombre: String,
-    telefono: String, // Añadido para mostrar el numero en la lista
+    telefono: String,
     catalogo: String,
-    imagenMenu: String
+    imagenMenu: String,
+    productos: { type: Array, default: [] }
 });
 const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig', configSchema);
 
@@ -66,12 +53,9 @@ async function connectDB() {
                 nombre: c.nombre,
                 telefono: c.telefono,
                 catalogo: c.catalogo,
-                imagenMenu: c.imagenMenu
+                imagenMenu: c.imagenMenu,
+                productos: c.productos || []
             };
-            const dbPath = `./data/${c.clientId}_productos.json`;
-            if (fs.existsSync(dbPath)) {
-                clientConfigs[c.clientId].productos = JSON.parse(fs.readFileSync(dbPath));
-            }
         }
 
     } catch (e) {
@@ -199,7 +183,24 @@ _Dime qué deseas pedir o si tienes alguna duda._`;
             await sock.sendMessage(sender, { text: respuestaIA });
         } catch (error) {
             console.error(`[ERROR GEMINI] Fallo en cliente ${clientId}:`, error);
-            await sock.sendMessage(sender, { text: "⏳ _Estoy revisando el inventario, dame un momentito por favor..._" });
+            
+            // FALLBACK AI LOCAL (Motor Heurístico)
+            const txt = textoCliente.toLowerCase();
+            const productos = config.productos || [];
+            let encontrados = productos.filter(p => txt.includes(p.nombre.toLowerCase()));
+            
+            let respuestaFallback = "";
+            if (encontrados.length > 0) {
+                respuestaFallback = `¡Hola! El sistema principal está un poco lento, pero veo que buscas sobre estos productos:\n`;
+                encontrados.forEach(p => respuestaFallback += `✅ *${p.nombre}* a $${p.precio}\n`);
+                respuestaFallback += `\n¿Deseas pedir algo de esto? Dime qué cantidad y a qué dirección enviamos.`;
+            } else if (txt.includes('menu') || txt.includes('catalogo')) {
+                respuestaFallback = `Aquí tienes nuestro menú:\n${catalogoLocal}\n\n¿Qué te enviamos hoy?`;
+            } else {
+                respuestaFallback = `¡Hola! Gracias por escribir a *${nombreLocal}*. Mi cerebro principal está en mantenimiento, pero sigo aquí para tomar tu orden. Escribe *menú* para ver las opciones o dime directamente qué deseas pedir.`;
+            }
+            
+            await sock.sendMessage(sender, { text: respuestaFallback });
         }
     });
 }
@@ -209,10 +210,9 @@ app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), asy
     const { clientId } = req.params;
     const { nombre, precio, descripcion } = req.body;
     
-    const dbPath = `./data/${clientId}_productos.json`;
-    let productos = [];
-    if (fs.existsSync(dbPath)) {
-        productos = JSON.parse(fs.readFileSync(dbPath));
+    let imagenBase64 = null;
+    if (req.file) {
+        imagenBase64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
     }
 
     const nuevoProducto = {
@@ -220,35 +220,46 @@ app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), asy
         nombre,
         precio: parseFloat(precio),
         descripcion,
-        imagen: req.file ? `/uploads/${clientId}/${req.file.filename}` : null
+        imagen: imagenBase64
     };
 
-    productos.push(nuevoProducto);
-    fs.writeFileSync(dbPath, JSON.stringify(productos, null, 2));
+    try {
+        const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig');
+        const config = await ClientConfig.findOne({ clientId });
+        let productos = config && config.productos ? config.productos : [];
+        productos.push(nuevoProducto);
 
-    // Update in memory so bot knows immediately
-    if (!clientConfigs[clientId]) clientConfigs[clientId] = {};
-    clientConfigs[clientId].productos = productos;
-    
-    // Auto-generate text catalog for Gemini AI
-    const catalogoTexto = productos.map(p => `- ${p.nombre}: $${p.precio} (${p.descripcion})`).join('
+        const catalogoTexto = productos.map(p => `- ${p.nombre}: $${p.precio} (${p.descripcion})`).join('
 ');
-    clientConfigs[clientId].catalogo = catalogoTexto;
+
+        await ClientConfig.findOneAndUpdate(
+            { clientId },
+            { productos: productos, catalogo: catalogoTexto },
+            { upsert: true }
+        );
+
+        if (!clientConfigs[clientId]) clientConfigs[clientId] = {};
+        clientConfigs[clientId].productos = productos;
+        clientConfigs[clientId].catalogo = catalogoTexto;
+
+        res.json({ success: true, message: 'Producto aislado y guardado en MongoDB', producto: nuevoProducto });
+    } catch(e) {
+        console.error("Error guardando producto:", e);
+        res.status(500).json({ success: false, error: 'Fallo al guardar en DB' });
+    }
+});
+
+app.get('/api/catalogo/:clientId/productos', async (req, res) => {
+    const { clientId } = req.params;
+    if (clientConfigs[clientId] && clientConfigs[clientId].productos) {
+        return res.json(clientConfigs[clientId].productos);
+    }
     
     try {
         const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig');
-        await ClientConfig.findOneAndUpdate({ clientId }, { catalogo: catalogoTexto }, { upsert: true });
-    } catch(e) {}
-
-    res.json({ success: true, message: 'Producto aislado y guardado', producto: nuevoProducto });
-});
-
-app.get('/api/catalogo/:clientId/productos', (req, res) => {
-    const { clientId } = req.params;
-    const dbPath = `./data/${clientId}_productos.json`;
-    if (fs.existsSync(dbPath)) {
-        res.json(JSON.parse(fs.readFileSync(dbPath)));
-    } else {
+        const config = await ClientConfig.findOne({ clientId });
+        res.json(config && config.productos ? config.productos : []);
+    } catch(e) {
         res.json([]);
     }
 });
