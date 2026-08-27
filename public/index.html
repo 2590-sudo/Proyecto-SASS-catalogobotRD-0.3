@@ -3,34 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel Admin - WhatsApp SaaS</title>
+    <title>Panel Admin - SaaS</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
         .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h1 { color: #075e54; text-align: center; }
         .card { border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-        input, select, button { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; }
+        input, select, textarea, button { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; }
+        textarea { resize: vertical; min-height: 100px; font-family: monospace; }
         button { background: #128c7e; color: white; border: none; cursor: pointer; font-weight: bold; }
         button:hover { background: #075e54; }
+        button.btn-danger { background: #d9534f; margin-top: 5px; }
+        button.btn-danger:hover { background: #c9302c; }
+        button.btn-update { background: #f0ad4e; }
+        button.btn-update:hover { background: #ec971f; }
         .code-box { font-size: 28px; font-weight: bold; color: #128c7e; text-align: center; margin: 15px 0; letter-spacing: 4px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+        th { background: #f8f9fa; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Administrador de Bots (SaaS)</h1>
+        <h1>Administrador de Negocios (SaaS)</h1>
         
         <div class="card">
-            <h3>Vincular Nuevo Negocio</h3>
+            <h3>1. Vincular Nuevo Negocio</h3>
             <input type="text" id="clientId" placeholder="ID del Cliente (ej: colmado_juan)">
             <input type="text" id="nombreLocal" placeholder="Nombre visible del local (ej: Colmado Los Muchachos)">
             <input type="text" id="phone" placeholder="Número del cliente (ej: 18091234567 sin +)">
+            
             <select id="tipoNegocio">
-                <option value="colmado">Colmado / Minimarket</option>
-                <option value="salon">Salón de Belleza / Barbería</option>
-                <option value="tienda">Tienda Genérica</option>
+                <option value="" disabled selected>-- Selecciona un Negocio --</option>
+                <optgroup label="Tier 1: Facturación Rápida">
+                    <option value="Colmado/Drink">1. Colmados y Drink</option>
+                    <option value="Restaurante/Pica Pollo">2. Restaurantes y Pica Pollos</option>
+                    <option value="Farmacia">3. Farmacias de Barrio</option>
+                    <option value="Salón/Barbería">4. Salones y Barberías</option>
+                    <option value="Ferretería">5. Ferreterías</option>
+                </optgroup>
+                <optgroup label="Tier 2: Catálogo Pesado">
+                    <option value="Tienda Ropa/Calzado">6. Tiendas de Ropa/Calzados</option>
+                    <option value="Repuestos">7. Repuestos de Motos/Carros</option>
+                    <option value="Celulares/Accesorios">8. Tiendas de Celulares y Accesorios</option>
+                    <option value="Floristería/Regalos">9. Floristerías y Regalos</option>
+                    <option value="Mueblería/Colchones">10. Mueblerías y Colchones</option>
+                </optgroup>
+                <optgroup label="Tier 3: Servicios">
+                    <option value="Gym">11. Gyms</option>
+                    <option value="Clínica/Doctor">12. Clínicas Dentales / Doctores</option>
+                    <option value="Instituto/Cursos">13. Institutos y Cursos</option>
+                    <option value="Agencia Viajes">14. Agencias de Viajes</option>
+                    <option value="Constructor/Plomero">15. Constructores / Plomeros / Electricistas</option>
+                </optgroup>
+                <optgroup label="Tier 4: Oro (Santo Domingo)">
+                    <option value="Dealer Vehículos">16. Dealers de Carros y Motos</option>
+                    <option value="Inmobiliaria">17. Inmobiliarias</option>
+                    <option value="Eventos/Decoración">18. Eventos y Decoración</option>
+                    <option value="Belleza/Spa">19. Belleza: Uñas, Pestañas, Spa</option>
+                    <option value="Proveedor B2B">20. Proveedores B2B</option>
+                </optgroup>
             </select>
+
+            <textarea id="catalogoInicial" placeholder="Pega aquí el menú/catálogo inicial con sus precios y emojis (ej: 🍗 Pica Pollo $250)"></textarea>
+            
             <button onclick="connectClient()">Generar Código de 8 Dígitos</button>
             <div id="pairingCode" class="code-box"></div>
+        </div>
+
+        <div class="card">
+            <h3>2. Clientes Registrados y Gestión</h3>
+            <button onclick="loadStatus()" style="background: #007bff; margin-bottom: 10px;">Actualizar Lista</button>
+            <table id="clientsTable">
+                <thead>
+                    <tr>
+                        <th>Negocio</th>
+                        <th>Estado</th>
+                        <th>Catálogo</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
         </div>
     </div>
 
@@ -40,9 +94,10 @@
             const nombreLocal = document.getElementById('nombreLocal').value.trim();
             const phone = document.getElementById('phone').value.trim();
             const tipoNegocio = document.getElementById('tipoNegocio').value;
+            const catalogo = document.getElementById('catalogoInicial').value.trim();
             const codeBox = document.getElementById('pairingCode');
             
-            if(!clientId || !phone || !nombreLocal) return alert('Llena todos los campos');
+            if(!clientId || !phone || !nombreLocal || !tipoNegocio) return alert('Llena todos los campos requeridos');
             
             codeBox.innerText = "Generando código... (Espera 3 segundos)";
             
@@ -50,14 +105,16 @@
                 const res = await fetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ clientId, phoneNumber: phone, tipoNegocio, nombreLocal })
+                    body: JSON.stringify({ clientId, phoneNumber: phone, tipoNegocio, nombreLocal, catalogo })
                 });
                 const data = await res.json();
                 
                 if(data.success && data.code) {
                     codeBox.innerText = data.code;
+                    setTimeout(loadStatus, 2000);
                 } else if(data.message) {
                     codeBox.innerText = data.message;
+                    loadStatus();
                 } else {
                     codeBox.innerText = "Error: " + data.error;
                 }
@@ -65,6 +122,52 @@
                 codeBox.innerText = "Error de conexión";
             }
         }
+
+        async function loadStatus() {
+            const res = await fetch('/api/status');
+            const status = await res.json();
+            
+            const tbody = document.querySelector('#clientsTable tbody');
+            tbody.innerHTML = '';
+            
+            for(const [clientId, info] of Object.entries(status)) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${info.nombre}</strong><br><small>(${clientId})</small></td>
+                    <td style="color: ${info.state.includes('Activo') ? 'green' : 'orange'}">${info.state}</td>
+                    <td>
+                        <textarea id="cat_${clientId}" rows="3" style="width: 150px; font-size: 11px;">${info.catalogo}</textarea><br>
+                        <button class="btn-update" onclick="updateCatalog('${clientId}')" style="padding: 5px; font-size: 11px;">Actualizar Catálogo</button>
+                    </td>
+                    <td>
+                        <button class="btn-danger" onclick="disconnectClient('${clientId}')" style="padding: 5px; font-size: 12px;">Desvincular (No pago)</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            }
+        }
+
+        async function updateCatalog(clientId) {
+            const newCatalog = document.getElementById(`cat_${clientId}`).value;
+            await fetch('/api/update_catalog', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clientId, catalogo: newCatalog })
+            });
+            alert('Catálogo actualizado exitosamente para ' + clientId);
+        }
+
+        async function disconnectClient(clientId) {
+            if(!confirm('¿Seguro que deseas cortar el servicio de ' + clientId + '? Esta acción borra su sesión.')) return;
+            await fetch('/api/disconnect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clientId })
+            });
+            loadStatus();
+        }
+        
+        loadStatus();
     </script>
 </body>
 </html>

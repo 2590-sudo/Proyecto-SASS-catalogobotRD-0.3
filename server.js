@@ -11,16 +11,16 @@ app.use(express.json());
 app.use(cors());
 app.use(express.static('public'));
 
-// Variables de Entorno
 const MONGO_URI = process.env.MONGO_URI || "URL_DE_MONGO_AQUI";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "TU_API_KEY_DE_GEMINI";
 
-// Inicializar Gemini
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 const activeSessions = {};
 const clientConfigs = {}; // Configuración de clientes (En el futuro a MongoDB)
+const activeConversations = {}; // Memoria temporal: { "clientId_sender": timestamp }
+const CONVERSATION_TIMEOUT = 30 * 60 * 1000; // 30 minutos
 
 async function connectDB() {
     try {
@@ -54,7 +54,7 @@ async function startClientSession(clientId, phoneNumber, res) {
             }
         }, 2000);
     } else {
-        if (res) res.json({ success: true, message: 'Ya estaba conectado en la base de datos' });
+        if (res) res.json({ success: true, message: 'Ya estaba conectado' });
     }
 
     sock.ev.on('connection.update', async (update) => {
@@ -62,19 +62,14 @@ async function startClientSession(clientId, phoneNumber, res) {
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                console.log(`Reconectando a ${clientId}...`);
                 setTimeout(() => startClientSession(clientId), 5000);
             } else {
-                console.log(`Cliente ${clientId} cerro sesion.`);
                 await removeCreds();
                 delete activeSessions[clientId];
             }
-        } else if (connection === 'open') {
-            console.log(`[!] ${clientId} esta online.`);
         }
     });
 
-    // MOTOR DE RESPUESTA: OPCION B (ACTIVACION POR PALABRAS CLAVE)
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
@@ -84,49 +79,59 @@ async function startClientSession(clientId, phoneNumber, res) {
 
         if (!textoCliente) return;
 
-        // FILTRO B: Palabras clave de negocio
-        const triggerWords = [
-            'hola', 'buenas', 'saludo', 'menu', 'menú', 'catalogo', 'catálogo', 
-            'pedido', 'orden', 'delivery', 'precio', 'cuanto', 'cuánto', 
-            'a como', 'tiene', 'venden', 'comprar', 'info', 'direccion', 'ubicacion'
-        ];
+        const conversationKey = `${clientId}_${sender}`;
+        const now = Date.now();
+        let isBusinessQuery = false;
 
-        const isBusinessQuery = triggerWords.some(kw => textoCliente.includes(kw));
-
-        if (!isBusinessQuery) {
-            // Es un mensaje personal, el bot lo ignora silenciosamente.
-            console.log(`[${clientId}] Ignorando mensaje personal: "${textoCliente}"`);
-            return;
+        // FILTRO MEJORADO: Ver si ya está en una conversación activa (últimos 30 min)
+        if (activeConversations[conversationKey] && (now - activeConversations[conversationKey] < CONVERSATION_TIMEOUT)) {
+            isBusinessQuery = true;
+        } else {
+            // Si no está en conversación, verificar si usó una palabra clave
+            const triggerWords = [
+                'hola', 'buenas', 'saludo', 'menu', 'menú', 'catalogo', 'catálogo', 
+                'pedido', 'orden', 'delivery', 'precio', 'cuanto', 'cuánto', 
+                'a como', 'tiene', 'venden', 'comprar', 'info', 'direccion', 'ubicacion'
+            ];
+            isBusinessQuery = triggerWords.some(kw => textoCliente.includes(kw));
         }
 
-        console.log(`[${clientId}] Cliente de negocio dice: ${textoCliente}`);
+        if (!isBusinessQuery) return; // Ignora mensajes personales
 
-        const tipoNegocio = clientConfigs[clientId]?.tipo || "colmado";
+        // Actualizar el temporizador de la conversación
+        activeConversations[conversationKey] = now;
+
+        const tipoNegocio = clientConfigs[clientId]?.tipo || "Negocio";
         const nombreLocal = clientConfigs[clientId]?.nombre || "Nuestro Local";
+        const catalogoLocal = clientConfigs[clientId]?.catalogo || "Catálogo en actualización.";
 
-        // Reglas Fijas para Saludos
+        // Reglas Fijas: Saludos (Solo si no pide menú explícitamente)
         const saludos = ['hola', 'buenas', 'saludos', 'buenos dias', 'buenas tardes', 'buenas noches'];
-        // Si SOLO es un saludo (o contiene un saludo pero no pide menu explicitamente)
-        if (saludos.some(s => textoCliente === s || textoCliente.startsWith(s)) && !textoCliente.includes('menu') && !textoCliente.includes('catalogo')) {
-            return sock.sendMessage(sender, { text: `¡Hola! Gracias por comunicarte con *${nombreLocal}*. ¿En qué podemos servirte hoy? Escribe *menu* para ver nuestras opciones.` });
+        if (saludos.some(s => textoCliente === s || textoCliente.startsWith(s + ' ')) && !textoCliente.includes('menu') && !textoCliente.includes('catalogo')) {
+            return sock.sendMessage(sender, { text: `¡Hola! Gracias por comunicarte con *${nombreLocal}*. ¿En qué podemos servirte hoy? Escribe *menú* para ver nuestras opciones.` });
         }
 
-        // Reglas Fijas para Menu
-        if (textoCliente.includes('menu') || textoCliente.includes('catalogo')) {
-            let menuTxt = `📋 *MENU DE ${nombreLocal.toUpperCase()}*\n\n`;
-            if (tipoNegocio === "colmado") {
-                menuTxt += "🍗 1. Pica Pollo ($250)\n🥛 2. Leche Rica ($80)\n🍺 3. Cerveza Presidente ($150)\n\n_Dime qué deseas pedir o si tienes alguna duda._";
-            } else if (tipoNegocio === "salon") {
-                menuTxt += "✂️ 1. Corte de Pelo ($500)\n💅 2. Uñas Acrilicas ($1200)\n💇‍♀️ 3. Lavado y Secado ($400)\n\n_¿A qué hora quieres tu cita?_";
-            } else {
-                menuTxt += "📦 1. Producto A ($100)\n📦 2. Producto B ($200)\n\n_Dime qué deseas pedir._";
-            }
+        // Reglas Fijas: Menú dinámico
+        if (textoCliente.includes('menu') || textoCliente.includes('menú') || textoCliente.includes('catalogo') || textoCliente.includes('catálogo')) {
+            let menuTxt = `📋 *CATÁLOGO DE ${nombreLocal.toUpperCase()}*\n\n${catalogoLocal}\n\n_Dime qué deseas pedir o si tienes alguna duda._`;
             return sock.sendMessage(sender, { text: menuTxt });
         }
 
-        // Si es una duda compleja o pedido especifico -> Gemini AI
+        // Gemini AI para continuar la conversación con contexto del catálogo
         try {
-            const prompt = `Eres un asistente de WhatsApp muy amable que trabaja en un negocio de tipo: ${tipoNegocio}. El local se llama: ${nombreLocal}. Un cliente dice: "${textoCliente}". Responde en un solo parrafo corto, amable y persuasivo, con estilo de Republica Dominicana. No ofrezcas productos si no sabes si hay, solo asiste con amabilidad o pide que especifique la orden.`;
+            const prompt = `Eres un asistente de WhatsApp de la República Dominicana, amable y persuasivo.
+            Trabajas en: ${nombreLocal} (Tipo: ${tipoNegocio})
+            
+            Este es tu CATÁLOGO DE PRODUCTOS ACTUAL:
+            ${catalogoLocal}
+
+            El cliente dice: "${textoCliente}". 
+            
+            REGLAS ESTRICTAS:
+            1. Responde en un solo párrafo corto y amigable.
+            2. BASA TUS RESPUESTAS EN EL CATÁLOGO. Si el cliente pide un producto o precio, búscalo en el catálogo y dáselo.
+            3. Si pide algo que no está en el catálogo, dile amablemente que por ahora no tienen eso disponible y ofrécele algo similar.
+            4. Si el cliente está pidiendo, confirma su orden y pregúntale su dirección de envío (si aplica).`;
             
             const result = await model.generateContent(prompt);
             const respuestaIA = result.response.text().trim();
@@ -138,16 +143,31 @@ async function startClientSession(clientId, phoneNumber, res) {
     });
 }
 
+// ENDPOINTS API
 app.post('/api/connect', async (req, res) => {
-    const { clientId, phoneNumber, tipoNegocio, nombreLocal } = req.body;
+    const { clientId, phoneNumber, tipoNegocio, nombreLocal, catalogo } = req.body;
     if (!clientId || !phoneNumber) return res.status(400).json({ error: 'Faltan datos' });
     
-    clientConfigs[clientId] = { tipo: tipoNegocio || "colmado", nombre: nombreLocal || "Mi Negocio" };
+    clientConfigs[clientId] = { 
+        tipo: tipoNegocio || "Negocio", 
+        nombre: nombreLocal || "Mi Negocio",
+        catalogo: catalogo || "Catálogo en actualización."
+    };
     
     if (activeSessions[clientId] && activeSessions[clientId].authState.creds.me?.id) {
-        return res.status(400).json({ error: 'El cliente ya esta conectado' });
+        return res.status(400).json({ error: 'El cliente ya está conectado' });
     }
     startClientSession(clientId, phoneNumber, res);
+});
+
+app.post('/api/update_catalog', (req, res) => {
+    const { clientId, catalogo } = req.body;
+    if (clientConfigs[clientId]) {
+        clientConfigs[clientId].catalogo = catalogo;
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: 'Cliente no encontrado en memoria' });
+    }
 });
 
 app.post('/api/disconnect', async (req, res) => {
@@ -166,12 +186,25 @@ app.post('/api/disconnect', async (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/status', (req, res) => {
+    const status = {};
+    for (const [id, sock] of Object.entries(activeSessions)) {
+        status[id] = {
+            state: sock.authState.creds.me?.id ? 'Conectado (Activo)' : 'Esperando Código...',
+            nombre: clientConfigs[id]?.nombre || 'Sin nombre',
+            catalogo: clientConfigs[id]?.catalogo || ''
+        };
+    }
+    res.json(status);
+});
+
 async function reactivarSesiones() {
     try {
         const Auth = mongoose.models.Auth || mongoose.model('Auth');
         const sesiones = await Auth.distinct('clientId');
-        console.log(`[Boot] Reactivando ${sesiones.length} bots desde MongoDB...`);
         for (const clientId of sesiones) {
+            // Valores por defecto al reiniciar (en un SaaS real, leeríamos clientConfigs de MongoDB)
+            clientConfigs[clientId] = { tipo: "Negocio Reactivado", nombre: clientId, catalogo: "Contacte al admin para actualizar catálogo." };
             startClientSession(clientId, null, null);
         }
     } catch(e) {}
