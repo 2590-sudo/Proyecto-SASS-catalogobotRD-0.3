@@ -6,7 +6,6 @@ const { default: makeWASocket, DisconnectReason } = require('@whiskeysockets/bai
 const pino = require('pino');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { useMongoDBAuthState } = require('./mongoAuth');
 
 const app = express();
@@ -19,10 +18,9 @@ const upload = multer({ storage });
 app.use(express.static('public'));
 
 const MONGO_URI = process.env.MONGO_URI || "URL_DE_MONGO_AQUI";
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "TU_API_KEY_DE_GEMINI";
-
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+const GROQ_MODEL = "llama3-8b-8192";
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const activeSessions = {};
 const clientConfigs = {}; 
@@ -40,6 +38,107 @@ const configSchema = new mongoose.Schema({
     activo: { type: Boolean, default: true }
 });
 const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig', configSchema);
+
+// === CEREBRO GROQ HÍBRIDO ===
+async function cerebroGroq(textoCliente, idNegocio) {
+    // Leer datos del negocio desde MongoDB (cache local o DB)
+    let config = clientConfigs[idNegocio];
+    if (!config) {
+        const dbConfig = await ClientConfig.findOne({ clientId: idNegocio });
+        if (dbConfig) {
+            config = {
+                tipo: dbConfig.tipo,
+                nombre: dbConfig.nombre,
+                catalogo: dbConfig.catalogo,
+                productos: dbConfig.productos || []
+            };
+            clientConfigs[idNegocio] = config;
+        }
+    }
+
+    const nombreNegocio = config?.nombre || "el negocio";
+    const tipoNegocio = config?.tipo || "tienda";
+    const catalogo = config?.catalogo || "Catalogo no disponible.";
+
+    // SYSTEM PROMPT dinamico
+    const systemPrompt = `Eres el asistente de ATENCION AL CLIENTE de: ${nombreNegocio}.
+Tipo de negocio: ${tipoNegocio}.
+Catalogo actual: ${catalogo}
+
+REGLAS:
+1. Tono: Humano, amable, corto. Como un empleado real de ${nombreNegocio}. Maximo 1 emoji.
+2. Identidad: Nunca digas que eres IA o robot. Eres "el asistente de ${nombreNegocio}".
+3. Objetivo: Responder dudas, dar precios, tomar pedidos y calcular totales usando SOLO el catalogo de arriba.
+4. Anti-Ban Meta: Nunca envies mensajes primero. Nunca uses MAYUSCULAS. Nunca repitas mensajes. Nunca mandes links.
+5. Si no esta en el catalogo: "Ese producto no lo tenemos ahora mismo en ${nombreNegocio}, te puedo ofrecer algo similar?"`;
+
+    const response = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + GROQ_API_KEY,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model: GROQ_MODEL,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: textoCliente }
+            ],
+            temperature: 0.7,
+            max_tokens: 300
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error('Groq API error: ' + response.status);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content.trim();
+}
+
+// === FALLBACK ANTI-CAIDA (desde MongoDB) ===
+function fallbackMongoDB(textoCliente, config) {
+    const txt = textoCliente.toLowerCase();
+    const productos = config.productos || [];
+    const nombreLocal = config.nombre || "el negocio";
+    const catalogoLocal = config.catalogo || "";
+
+    // Buscar productos mencionados
+    let encontrados = productos.filter(function(p) { 
+        return txt.includes(p.nombre.toLowerCase()) || 
+        (p.descripcion && txt.includes(p.descripcion.toLowerCase()));
+    });
+
+    // Si hay productos encontrados, responder con precios
+    if (encontrados.length > 0) {
+        let respuesta = 'Veo que buscas:\n';
+        let total = 0;
+        encontrados.forEach(function(p) {
+            respuesta += p.nombre + ': $' + p.precio + '\n';
+            total += parseFloat(p.precio) || 0;
+        });
+        if (encontrados.length > 1) {
+            respuesta += '\nTotal: $' + total.toFixed(2) + '\n\nConfirmas tu pedido? Dime tu direccion para el envio.';
+        } else {
+            respuesta += '\nCuantas unidades deseas? Dime y lo preparo.';
+        }
+        return respuesta;
+    }
+
+    // Si pide menu
+    if (txt.includes('menu') || txt.includes('catalogo')) {
+        return 'Nuestro catalogo:\n' + catalogoLocal + '\n\nQue deseas pedir?';
+    }
+
+    // Si parece pedido
+    if (txt.includes('pedido') || txt.includes('orden') || txt.includes('quiero') || txt.includes('dame')) {
+        return 'Gracias por escribir a ' + nombreLocal + '. Escribe "menu" para ver nuestras opciones disponibles.';
+    }
+
+    // Respuesta generica
+    return 'Hola, gracias por escribir a ' + nombreLocal + '. Escribe "menu" para ver lo que tenemos disponible.';
+}
 
 async function connectDB() {
     try {
@@ -93,10 +192,29 @@ async function startClientSession(clientId, phoneNumber, res) {
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
+        if (connection === 'open') {
+            // === MENSAJE AL PROPIETARIO ===
+            console.log('[CONEXION] Cliente ' + clientId + ' conectado exitosamente');
+            try {
+                const config = clientConfigs[clientId] || {};
+                const telefonoOwner = config.telefono;
+                if (telefonoOwner) {
+                    const jidOwner = telefonoOwner.includes('@s.whatsapp.net') 
+                        ? telefonoOwner 
+                        : telefonoOwner + '@s.whatsapp.net';
+                    await sock.sendMessage(jidOwner, { 
+                        text: 'Asistente activado y atendiendo clientes 24/7 desde su WhatsApp.' 
+                    });
+                    console.log('[MENSAJE PROPIETARIO] Notificacion enviada a ' + telefonoOwner);
+                }
+            } catch (e) {
+                console.error('[MENSAJE PROPIETARIO] Error:', e.message);
+            }
+        }
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                setTimeout(() => startClientSession(clientId), 5000);
+                setTimeout(function() { startClientSession(clientId); }, 5000);
             } else {
                 await removeCreds();
                 delete activeSessions[clientId];
@@ -113,7 +231,7 @@ async function startClientSession(clientId, phoneNumber, res) {
 
         if (!textoCliente) return;
 
-        const conversationKey = `${clientId}_${sender}`;
+        const conversationKey = clientId + '_' + sender;
         const now = Date.now();
         let isBusinessQuery = false;
 
@@ -121,12 +239,12 @@ async function startClientSession(clientId, phoneNumber, res) {
             isBusinessQuery = true;
         } else {
             const triggerWords = [
-                'hola', 'buenas', 'saludo', 'menu', 'menú', 'catalogo', 'catálogo', 
-                'pedido', 'orden', 'delivery', 'precio', 'cuanto', 'cuánto', 
+                'hola', 'buenas', 'saludo', 'menu', 'catalogo', 
+                'pedido', 'orden', 'delivery', 'precio', 'cuanto', 
                 'a como', 'tiene', 'venden', 'comprar', 'info', 'direccion', 'ubicacion',
                 'quiero', 'dame', 'necesito', 'busco', 'tienen', 'hay', 'deseo', 'mandame'
             ];
-            isBusinessQuery = triggerWords.some(kw => textoCliente.includes(kw));
+            isBusinessQuery = triggerWords.some(function(kw) { return textoCliente.includes(kw); });
         }
 
         if (!isBusinessQuery) return; 
@@ -135,27 +253,23 @@ async function startClientSession(clientId, phoneNumber, res) {
 
         const config = clientConfigs[clientId] || {};
         if (config.activo === false) {
-            console.log(`[BOT SUSPENDIDO] Cliente ${clientId} inactivo. Ignorando msj.`);
+            console.log('[BOT SUSPENDIDO] Cliente ' + clientId + ' inactivo. Ignorando msj.');
             return;
         }
-        console.log(`[WS IN] Mensaje recibido de ${sender}: ${textoCliente}`);
+        console.log('[WS IN] Mensaje recibido de ' + sender + ': ' + textoCliente);
 
         const tipoNegocio = config.tipo || "Negocio";
         const nombreLocal = config.nombre || "Nuestro Local";
-        const catalogoLocal = config.catalogo || "Catálogo no disponible.";
+        const catalogoLocal = config.catalogo || "Catalogo no disponible.";
         const imagenMenu = config.imagenMenu || null;
 
         const saludos = ['hola', 'buenas', 'saludos', 'buenos dias', 'buenas tardes', 'buenas noches'];
-        if (saludos.some(s => textoCliente === s || textoCliente.startsWith(s + ' ')) && !textoCliente.includes('menu') && !textoCliente.includes('catalogo')) {
-            return sock.sendMessage(sender, { text: `¡Hola! Gracias por comunicarte con *${nombreLocal}*. ¿En qué podemos servirte hoy? Escribe *menú* para ver nuestras opciones.` });
+        if (saludos.some(function(s) { return textoCliente === s || textoCliente.startsWith(s + ' '); }) && !textoCliente.includes('menu') && !textoCliente.includes('catalogo')) {
+            return sock.sendMessage(sender, { text: 'Hola! Gracias por comunicarte con *' + nombreLocal + '*. En que podemos servirte hoy? Escribe *menu* para ver nuestras opciones.' });
         }
 
-        if (textoCliente.includes('menu') || textoCliente.includes('menú') || textoCliente.includes('catalogo') || textoCliente.includes('catálogo')) {
-            let menuTxt = `📋 *CATÁLOGO DE ${nombreLocal.toUpperCase()}*
-
-${catalogoLocal}
-
-_Dime qué deseas pedir o si tienes alguna duda._`;
+        if (textoCliente.includes('menu') || textoCliente.includes('catalogo')) {
+            let menuTxt = '*CATALOGO DE ' + nombreLocal.toUpperCase() + '*\n\n' + catalogoLocal + '\n\n_Dime que deseas pedir o si tienes alguna duda._';
             
             if (imagenMenu) {
                 try {
@@ -170,44 +284,15 @@ _Dime qué deseas pedir o si tienes alguna duda._`;
             }
         }
 
+        // === CEREBRO GROQ HIBRIDO ===
         try {
-            const prompt = `Eres un asistente de WhatsApp de la República Dominicana, súper amable, servicial y persuasivo.
-            Trabajas en: ${nombreLocal} (Tipo: ${tipoNegocio})
-            
-            ESTE ES TU CATÁLOGO ESTRICTO DE PRODUCTOS Y PRECIOS:
-            ${catalogoLocal}
-
-            El cliente dice: "${textoCliente}". 
-            
-            REGLAS VITALES:
-            1. Responde SIEMPRE en UN SOLO PÁRRAFO corto, natural y amigable.
-            2. BASA TUS RESPUESTAS SOLO EN EL CATÁLOGO. No inventes precios ni productos.
-            3. Si el cliente pide algo que NO está en el catálogo, dile amablemente que por ahora no tienen ese producto y ofrécele la mejor alternativa que SÍ esté en el catálogo.
-            4. Si el cliente está pidiendo o confirmando un pedido, hazle un resumen rápido de su orden y pregúntale su dirección para el envío.`;
-            
-            const result = await model.generateContent(prompt);
-            const respuestaIA = result.response.text().trim();
-            
+            const respuestaIA = await cerebroGroq(textoCliente, clientId);
             await sock.sendMessage(sender, { text: respuestaIA });
         } catch (error) {
-            console.error(`[ERROR GEMINI] Fallo en cliente ${clientId}:`, error);
+            console.error('[ERROR GROQ] Fallo en cliente ' + clientId + ':', error.message);
             
-            // FALLBACK AI LOCAL (Motor Heurístico)
-            const txt = textoCliente.toLowerCase();
-            const productos = config.productos || [];
-            let encontrados = productos.filter(p => txt.includes(p.nombre.toLowerCase()));
-            
-            let respuestaFallback = "";
-            if (encontrados.length > 0) {
-                respuestaFallback = `¡Hola! El sistema principal está un poco lento, pero veo que buscas sobre estos productos:\n`;
-                encontrados.forEach(p => respuestaFallback += `✅ *${p.nombre}* a $${p.precio}\n`);
-                respuestaFallback += `\n¿Deseas pedir algo de esto? Dime qué cantidad y a qué dirección enviamos.`;
-            } else if (txt.includes('menu') || txt.includes('catalogo')) {
-                respuestaFallback = `Aquí tienes nuestro menú:\n${catalogoLocal}\n\n¿Qué te enviamos hoy?`;
-            } else {
-                respuestaFallback = `¡Hola! Gracias por escribir a *${nombreLocal}*. Mi cerebro principal está en mantenimiento, pero sigo aquí para tomar tu orden. Escribe *menú* para ver las opciones o dime directamente qué deseas pedir.`;
-            }
-            
+            // FALLBACK ANTI-CAIDA: responder directo desde MongoDB
+            const respuestaFallback = fallbackMongoDB(textoCliente, config);
             await sock.sendMessage(sender, { text: respuestaFallback });
         }
     });
@@ -220,14 +305,14 @@ app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), asy
     
     let imagenBase64 = null;
     if (req.file) {
-        imagenBase64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+        imagenBase64 = 'data:' + req.file.mimetype + ';base64,' + req.file.buffer.toString('base64');
     }
 
     const nuevoProducto = {
         id: Date.now().toString(),
-        nombre,
+        nombre: nombre,
         precio: parseFloat(precio),
-        descripcion,
+        descripcion: descripcion,
         imagen: imagenBase64
     };
 
@@ -237,7 +322,7 @@ app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), asy
         let productos = config && config.productos ? config.productos : [];
         productos.push(nuevoProducto);
 
-const catalogoTexto = productos.map(function(p) { return "- " + p.nombre + ": $" + p.precio + " (" + p.descripcion + ")"; }).join("\n");
+        const catalogoTexto = productos.map(function(p) { return "- " + p.nombre + ": $" + p.precio + " (" + p.descripcion + ")"; }).join("\n");
 
         await ClientConfig.findOneAndUpdate(
             { clientId },
@@ -281,10 +366,10 @@ app.post('/api/connect', async (req, res) => {
         { upsert: true, new: true }
     );
     
-    clientConfigs[clientId] = { tipo: tipoNegocio, nombre: nombreLocal, telefono: phoneNumber, catalogo, imagenMenu: null };
+    clientConfigs[clientId] = { tipo: tipoNegocio, nombre: nombreLocal, telefono: phoneNumber, catalogo: catalogo, imagenMenu: null };
     
     if (activeSessions[clientId] && activeSessions[clientId].authState.creds.me?.id) {
-        return res.status(400).json({ error: 'El cliente ya está conectado' });
+        return res.status(400).json({ error: 'El cliente ya esta conectado' });
     }
     startClientSession(clientId, phoneNumber, res);
 });
@@ -365,7 +450,7 @@ async function reactivarSesiones() {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-    console.log(`🚀 Motor SaaS escuchando en el puerto ${PORT}`);
+    console.log('Motor SaaS escuchando en el puerto ' + PORT);
     if (MONGO_URI !== "URL_DE_MONGO_AQUI") {
         await connectDB();
         reactivarSesiones();
