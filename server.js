@@ -36,7 +36,8 @@ const configSchema = new mongoose.Schema({
     telefono: String,
     catalogo: String,
     imagenMenu: String,
-    productos: { type: Array, default: [] }
+    productos: { type: Array, default: [] },
+    activo: { type: Boolean, default: true }
 });
 const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig', configSchema);
 
@@ -54,7 +55,8 @@ async function connectDB() {
                 telefono: c.telefono,
                 catalogo: c.catalogo,
                 imagenMenu: c.imagenMenu,
-                productos: c.productos || []
+                productos: c.productos || [],
+                activo: c.activo !== false
             };
         }
 
@@ -107,7 +109,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
 
         const sender = msg.key.remoteJid;
-        const textoCliente = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim().toLowerCase();
+        const textoCliente = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || "").trim().toLowerCase();
 
         if (!textoCliente) return;
 
@@ -132,6 +134,12 @@ async function startClientSession(clientId, phoneNumber, res) {
         activeConversations[conversationKey] = now;
 
         const config = clientConfigs[clientId] || {};
+        if (config.activo === false) {
+            console.log(`[BOT SUSPENDIDO] Cliente ${clientId} inactivo. Ignorando msj.`);
+            return;
+        }
+        console.log(`[WS IN] Mensaje recibido de ${sender}: ${textoCliente}`);
+
         const tipoNegocio = config.tipo || "Negocio";
         const nombreLocal = config.nombre || "Nuestro Local";
         const catalogoLocal = config.catalogo || "Catálogo no disponible.";
@@ -309,6 +317,27 @@ app.post('/api/disconnect', async (req, res) => {
     res.json({ success: true });
 });
 
+
+app.post('/api/toggle-status', async (req, res) => {
+    const { clientId } = req.body;
+    try {
+        const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig');
+        const config = await ClientConfig.findOne({ clientId });
+        if(config) {
+            config.activo = config.activo === false ? true : false;
+            await config.save();
+            if(clientConfigs[clientId]) {
+                clientConfigs[clientId].activo = config.activo;
+            }
+            res.json({ success: true, activo: config.activo });
+        } else {
+            res.status(404).json({ error: 'Cliente no encontrado' });
+        }
+    } catch(e) {
+        res.status(500).json({ error: 'Error BD' });
+    }
+});
+
 app.get('/api/status', (req, res) => {
     const status = {};
     for (const [id, config] of Object.entries(clientConfigs)) {
@@ -317,7 +346,8 @@ app.get('/api/status', (req, res) => {
             nombre: config.nombre || 'Sin nombre',
             telefono: config.telefono || 'Desconocido',
             catalogo: config.catalogo || '',
-            tieneImagen: !!config.imagenMenu
+            tieneImagen: !!config.imagenMenu,
+            activo: config.activo !== false
         };
     }
     res.json(status);
