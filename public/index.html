@@ -94,22 +94,34 @@
     </div>
 
     <!-- Modal para Editar Catálogo y Subir Fotos -->
-    <div id="editModal">
-        <div class="modal-content">
-            <h2 id="modalTitle">Editar Catálogo</h2>
-            <p style="font-size: 13px; color: #666;">Modifica los productos y sube la foto (flyer) que se enviará automáticamente cuando pidan el menú.</p>
-            
-            <textarea id="modalCatalog" rows="8" placeholder="Escribe los productos y precios actualizados aquí..."></textarea>
-            
-            <label style="font-weight: bold; margin-top: 15px; display: block;">📸 Subir Nuevo Flyer o Foto (Opcional):</label>
-            <input type="file" id="modalImageUpload" accept="image/png, image/jpeg, image/jpg" onchange="previewImage(event)">
-            <img id="modalPreview" class="img-preview" />
-            
-            <input type="hidden" id="modalClientId">
-            
-            <button class="btn-update" onclick="saveCatalog()" style="margin-top: 20px;">💾 Guardar Cambios en el Bot</button>
-            <button onclick="closeModal()" style="background: #888;">Cancelar</button>
+    
+        <!-- Modal de Edición de Catálogo -->
+        <div id="editModal">
+            <div class="modal-content">
+                <h3 id="modalTitle">Gestión de Catálogo</h3>
+                <input type="hidden" id="modalClientId">
+                
+                <div style="border-bottom: 1px solid #ddd; margin-bottom: 15px; padding-bottom: 10px;">
+                    <h4>Añadir Nuevo Producto</h4>
+                    <form id="productForm" enctype="multipart/form-data">
+                        <input type="text" id="prodNombre" placeholder="Nombre del Producto" required>
+                        <input type="number" id="prodPrecio" placeholder="Precio (RD$)" required>
+                        <textarea id="prodDesc" placeholder="Descripción del producto..."></textarea>
+                        <label>Foto del Producto:</label>
+                        <input type="file" id="prodFoto" name="foto_producto" accept="image/*">
+                        <button type="button" class="btn-update" onclick="saveProduct()">➕ Guardar Producto</button>
+                    </form>
+                </div>
+                
+                <h4>Productos Actuales</h4>
+                <div id="productList" style="max-height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                    <!-- Productos se cargan aquí -->
+                </div>
+
+                <button class="btn-danger" onclick="closeModal()" style="margin-top: 15px;">Cerrar Panel</button>
+            </div>
         </div>
+
     </div>
 
     <script>
@@ -170,7 +182,53 @@
             }
         }
 
-        function openModal(clientId, catalogo) {
+        
+        async function loadProducts(clientId) {
+            const res = await fetch(`/api/catalogo/${clientId}/productos`);
+            const productos = await res.json();
+            const list = document.getElementById('productList');
+            list.innerHTML = '';
+            productos.forEach(p => {
+                list.innerHTML += `<div style="padding: 5px; border-bottom: 1px solid #ccc;">
+                    <strong>${p.nombre}</strong> - $${p.precio} <br>
+                    <small>${p.descripcion}</small>
+                    ${p.imagen ? `<br><img src="${p.imagen}" width="50">` : ''}
+                </div>`;
+            });
+        }
+
+        async function openModal(clientId) {
+            document.getElementById('modalTitle').innerText = "Catálogo de: " + clientId;
+            document.getElementById('modalClientId').value = clientId;
+            document.getElementById('editModal').style.display = "block";
+            await loadProducts(clientId);
+        }
+
+        async function saveProduct() {
+            const clientId = document.getElementById('modalClientId').value;
+            const formData = new FormData();
+            formData.append('nombre', document.getElementById('prodNombre').value);
+            formData.append('precio', document.getElementById('prodPrecio').value);
+            formData.append('descripcion', document.getElementById('prodDesc').value);
+            const foto = document.getElementById('prodFoto').files[0];
+            if(foto) formData.append('foto_producto', foto);
+
+            const res = await fetch(`/api/catalogo/${clientId}/producto`, {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if(data.success) {
+                alert('Producto guardado!');
+                document.getElementById('productForm').reset();
+                await loadProducts(clientId);
+                fetchClients();
+            } else {
+                alert('Error al guardar');
+            }
+        }
+
+        function old_openModal(clientId, catalogo) {
             document.getElementById('modalTitle').innerText = "Gestión de: " + clientId;
             document.getElementById('modalClientId').value = clientId;
             document.getElementById('modalCatalog').value = catalogo;

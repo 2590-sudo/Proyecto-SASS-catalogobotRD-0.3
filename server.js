@@ -1,4 +1,7 @@
 const express = require('express');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
 const { default: makeWASocket, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const mongoose = require('mongoose');
@@ -9,6 +12,24 @@ const { useMongoDBAuthState } = require('./mongoAuth');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
+
+// Aislamiento File System
+if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
+if (!fs.existsSync('./public/uploads')) fs.mkdirSync('./public/uploads', { recursive: true });
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const clientId = req.params.clientId;
+        const dir = `./public/uploads/${clientId}`;
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+        cb(null, `prod_${Date.now()}${path.extname(file.originalname)}`);
+    }
+});
+const upload = multer({ storage });
+
 app.use(express.static('public'));
 
 const MONGO_URI = process.env.MONGO_URI || "URL_DE_MONGO_AQUI";
@@ -38,6 +59,7 @@ async function connectDB() {
         console.log("Conectado a MongoDB");
         
         const configs = await ClientConfig.find();
+        
         for (const c of configs) {
             clientConfigs[c.clientId] = {
                 tipo: c.tipo,
@@ -46,7 +68,12 @@ async function connectDB() {
                 catalogo: c.catalogo,
                 imagenMenu: c.imagenMenu
             };
+            const dbPath = `./data/${c.clientId}_productos.json`;
+            if (fs.existsSync(dbPath)) {
+                clientConfigs[c.clientId].productos = JSON.parse(fs.readFileSync(dbPath));
+            }
         }
+
     } catch (e) {
         console.error("Error conectando a MongoDB:", e);
     }
@@ -132,7 +159,11 @@ async function startClientSession(clientId, phoneNumber, res) {
         }
 
         if (textoCliente.includes('menu') || textoCliente.includes('menú') || textoCliente.includes('catalogo') || textoCliente.includes('catálogo')) {
-            let menuTxt = `📋 *CATÁLOGO DE ${nombreLocal.toUpperCase()}*\n\n${catalogoLocal}\n\n_Dime qué deseas pedir o si tienes alguna duda._`;
+            let menuTxt = `📋 *CATÁLOGO DE ${nombreLocal.toUpperCase()}*
+
+${catalogoLocal}
+
+_Dime qué deseas pedir o si tienes alguna duda._`;
             
             if (imagenMenu) {
                 try {
@@ -172,6 +203,55 @@ async function startClientSession(clientId, phoneNumber, res) {
         }
     });
 }
+
+
+app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), async (req, res) => {
+    const { clientId } = req.params;
+    const { nombre, precio, descripcion } = req.body;
+    
+    const dbPath = `./data/${clientId}_productos.json`;
+    let productos = [];
+    if (fs.existsSync(dbPath)) {
+        productos = JSON.parse(fs.readFileSync(dbPath));
+    }
+
+    const nuevoProducto = {
+        id: Date.now().toString(),
+        nombre,
+        precio: parseFloat(precio),
+        descripcion,
+        imagen: req.file ? `/uploads/${clientId}/${req.file.filename}` : null
+    };
+
+    productos.push(nuevoProducto);
+    fs.writeFileSync(dbPath, JSON.stringify(productos, null, 2));
+
+    // Update in memory so bot knows immediately
+    if (!clientConfigs[clientId]) clientConfigs[clientId] = {};
+    clientConfigs[clientId].productos = productos;
+    
+    // Auto-generate text catalog for Gemini AI
+    const catalogoTexto = productos.map(p => `- ${p.nombre}: $${p.precio} (${p.descripcion})`).join('
+');
+    clientConfigs[clientId].catalogo = catalogoTexto;
+    
+    try {
+        const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig');
+        await ClientConfig.findOneAndUpdate({ clientId }, { catalogo: catalogoTexto }, { upsert: true });
+    } catch(e) {}
+
+    res.json({ success: true, message: 'Producto aislado y guardado', producto: nuevoProducto });
+});
+
+app.get('/api/catalogo/:clientId/productos', (req, res) => {
+    const { clientId } = req.params;
+    const dbPath = `./data/${clientId}_productos.json`;
+    if (fs.existsSync(dbPath)) {
+        res.json(JSON.parse(fs.readFileSync(dbPath)));
+    } else {
+        res.json([]);
+    }
+});
 
 app.post('/api/connect', async (req, res) => {
     const { clientId, phoneNumber, tipoNegocio, nombreLocal, catalogo } = req.body;
