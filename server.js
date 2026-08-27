@@ -230,7 +230,6 @@ app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), asy
         productos.push(nuevoProducto);
 
 const catalogoTexto = productos.map(function(p) { return "- " + p.nombre + ": $" + p.precio + " (" + p.descripcion + ")"; }).join("\n");
-');
 
         await ClientConfig.findOneAndUpdate(
             { clientId },
