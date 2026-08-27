@@ -172,10 +172,18 @@
                         <span style="font-size:11px; color:#555;">📸 Flyer Activo: <b>${info.tieneImagen ? 'SÍ' : 'NO'}</b></span>
                     </td>
                     <td style="font-family: monospace; font-size: 15px;">📞 ${info.telefono}</td>
-                    <td style="color: ${info.state.includes('Activo') ? 'green' : 'orange'}"><b>${info.state}</b></td>
+                    <td style="color: ${info.state.includes('Activo') ? 'green' : 'orange'}">
+                        <b>${info.state}</b><br>
+                        <span style="font-size:12px; font-weight:bold; color: ${info.activo ? 'blue' : 'red'};">
+                            ${info.activo ? '▶️ EN SERVICIO' : '⏸️ SUSPENDIDO (Falta de Pago)'}
+                        </span>
+                    </td>
                     <td>
-                        <button class="btn-update" onclick="openModal('${clientId}', \`${info.catalogo.replace(/`/g, '\\`')}\`)">✏️ Editar Menú y Foto</button>
-                        <button class="btn-danger" onclick="disconnectClient('${clientId}')">🚫 Desvincular (Corte)</button>
+                        <button class="btn-update" onclick="openModal('${clientId}', \`${info.catalogo.replace(/`/g, '\`')}\`)">✏️ Editar Menú y Foto</button>
+                        <button class="btn-warning" onclick="toggleStatus('${clientId}')" style="background:${info.activo ? '#ff9800' : '#28a745'}; color:white; border:none; padding:5px; border-radius:3px; cursor:pointer;">
+                            ${info.activo ? '⏸️ Suspender' : '▶️ Reactivar'}
+                        </button>
+                        <button class="btn-danger" onclick="disconnectClient('${clientId}')" style="margin-top:5px;">🚫 Desvincular</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
@@ -183,7 +191,29 @@
         }
 
         
+        
+        async function toggleStatus(clientId) {
+            if(!confirm('¿Seguro que deseas cambiar el estado de suspensión de este cliente?')) return;
+            try {
+                const res = await fetch('/api/toggle-status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clientId })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    alert(data.activo ? 'Cliente REACTIVADO. El bot volverá a responder.' : 'Cliente SUSPENDIDO. El bot ignorará los mensajes.');
+                    loadStatus();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch(e) {
+                alert('Fallo de red');
+            }
+        }
+
         async function loadProducts(clientId) {
+
             const res = await fetch(`/api/catalogo/${clientId}/productos`);
             const productos = await res.json();
             const list = document.getElementById('productList');
