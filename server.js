@@ -7,7 +7,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { useMongoDBAuthState } = require('./mongoAuth');
 
 const app = express();
-app.use(express.json({ limit: '10mb' })); // Aumentado para permitir imagenes
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 app.use(express.static('public'));
 
@@ -20,15 +20,14 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 const activeSessions = {};
 const clientConfigs = {}; 
 const activeConversations = {}; 
-const CONVERSATION_TIMEOUT = 30 * 60 * 1000; 
+const CONVERSATION_TIMEOUT = 60 * 60 * 1000; // Aumentado a 1 hora
 
-// ESQUEMA DE MONGODB PARA GUARDAR CONFIGURACIONES Y CATALOGOS
 const configSchema = new mongoose.Schema({
     clientId: { type: String, unique: true },
     tipo: String,
     nombre: String,
     catalogo: String,
-    imagenMenu: String // Guardaremos el flyer en Base64
+    imagenMenu: String
 });
 const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig', configSchema);
 
@@ -37,7 +36,6 @@ async function connectDB() {
         await mongoose.connect(MONGO_URI);
         console.log("Conectado a MongoDB");
         
-        // Cargar configuraciones guardadas a la memoria
         const configs = await ClientConfig.find();
         for (const c of configs) {
             clientConfigs[c.clientId] = {
@@ -107,10 +105,12 @@ async function startClientSession(clientId, phoneNumber, res) {
         if (activeConversations[conversationKey] && (now - activeConversations[conversationKey] < CONVERSATION_TIMEOUT)) {
             isBusinessQuery = true;
         } else {
+            // Diccionario expandido para captar cualquier intencion de compra
             const triggerWords = [
                 'hola', 'buenas', 'saludo', 'menu', 'menú', 'catalogo', 'catálogo', 
                 'pedido', 'orden', 'delivery', 'precio', 'cuanto', 'cuánto', 
-                'a como', 'tiene', 'venden', 'comprar', 'info', 'direccion', 'ubicacion'
+                'a como', 'tiene', 'venden', 'comprar', 'info', 'direccion', 'ubicacion',
+                'quiero', 'dame', 'necesito', 'busco', 'tienen', 'hay', 'deseo', 'mandame'
             ];
             isBusinessQuery = triggerWords.some(kw => textoCliente.includes(kw));
         }
@@ -122,7 +122,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         const config = clientConfigs[clientId] || {};
         const tipoNegocio = config.tipo || "Negocio";
         const nombreLocal = config.nombre || "Nuestro Local";
-        const catalogoLocal = config.catalogo || "Catálogo en actualización.";
+        const catalogoLocal = config.catalogo || "Catálogo no disponible.";
         const imagenMenu = config.imagenMenu || null;
 
         const saludos = ['hola', 'buenas', 'saludos', 'buenos dias', 'buenas tardes', 'buenas noches'];
@@ -133,14 +133,12 @@ async function startClientSession(clientId, phoneNumber, res) {
         if (textoCliente.includes('menu') || textoCliente.includes('menú') || textoCliente.includes('catalogo') || textoCliente.includes('catálogo')) {
             let menuTxt = `📋 *CATÁLOGO DE ${nombreLocal.toUpperCase()}*\n\n${catalogoLocal}\n\n_Dime qué deseas pedir o si tienes alguna duda._`;
             
-            // Si hay una foto guardada en Mongo, enviarla junto con el texto
             if (imagenMenu) {
                 try {
                     const base64Data = imagenMenu.replace(/^data:image\/\w+;base64,/, "");
                     const buffer = Buffer.from(base64Data, 'base64');
                     return sock.sendMessage(sender, { image: buffer, caption: menuTxt });
                 } catch(e) {
-                    console.error("Error enviando imagen:", e);
                     return sock.sendMessage(sender, { text: menuTxt });
                 }
             } else {
@@ -148,34 +146,39 @@ async function startClientSession(clientId, phoneNumber, res) {
             }
         }
 
+        // --- GEMINI AI CON REDUNDANCIA Y MANEJO DE ERRORES ---
         try {
-            const prompt = `Eres un asistente de WhatsApp de la República Dominicana, amable y persuasivo.
+            const prompt = `Eres un asistente de WhatsApp de la República Dominicana, súper amable, servicial y persuasivo.
             Trabajas en: ${nombreLocal} (Tipo: ${tipoNegocio})
-            Catálogo Actual: ${catalogoLocal}
+            
+            ESTE ES TU CATÁLOGO ESTRICTO DE PRODUCTOS Y PRECIOS:
+            ${catalogoLocal}
 
             El cliente dice: "${textoCliente}". 
             
-            REGLAS:
-            1. Responde en un solo párrafo corto y amigable.
-            2. Basa tus respuestas en el catálogo.
-            3. Si pide algo que no está en el catálogo, dile que no hay y ofrece algo similar.
-            4. Si está pidiendo, confirma su orden y pregunta su dirección.`;
+            REGLAS VITALES:
+            1. Responde SIEMPRE en UN SOLO PÁRRAFO corto, natural y amigable.
+            2. BASA TUS RESPUESTAS SOLO EN EL CATÁLOGO. No inventes precios ni productos.
+            3. Si el cliente pide algo que NO está en el catálogo, dile amablemente que por ahora no tienen ese producto y ofrécele la mejor alternativa que SÍ esté en el catálogo.
+            4. Si el cliente está pidiendo o confirmando un pedido, hazle un resumen rápido de su orden y pregúntale su dirección para el envío.`;
             
             const result = await model.generateContent(prompt);
             const respuestaIA = result.response.text().trim();
             
             await sock.sendMessage(sender, { text: respuestaIA });
         } catch (error) {
-            console.error(`Error en Gemini para ${clientId}:`, error);
+            console.error(`[ERROR GEMINI] Fallo en cliente ${clientId}:`, error);
+            // Mensaje de fallback elegante para no dejar al cliente en visto
+            await sock.sendMessage(sender, { text: "⏳ _Estoy revisando el inventario, dame un momentito por favor..._" });
         }
     });
 }
 
+// ... ENDPOINTS API (Sin cambios)
 app.post('/api/connect', async (req, res) => {
     const { clientId, phoneNumber, tipoNegocio, nombreLocal, catalogo } = req.body;
     if (!clientId || !phoneNumber) return res.status(400).json({ error: 'Faltan datos' });
     
-    // Guardar o actualizar en MongoDB
     await ClientConfig.findOneAndUpdate(
         { clientId },
         { tipo: tipoNegocio, nombre: nombreLocal, catalogo: catalogo },
@@ -192,18 +195,11 @@ app.post('/api/connect', async (req, res) => {
 
 app.post('/api/update_catalog', async (req, res) => {
     const { clientId, catalogo, imagenMenu } = req.body;
-    
     try {
-        await ClientConfig.findOneAndUpdate(
-            { clientId },
-            { catalogo, imagenMenu },
-            { upsert: true }
-        );
-        
+        await ClientConfig.findOneAndUpdate({ clientId }, { catalogo, imagenMenu }, { upsert: true });
         if (!clientConfigs[clientId]) clientConfigs[clientId] = {};
         clientConfigs[clientId].catalogo = catalogo;
         if(imagenMenu !== undefined) clientConfigs[clientId].imagenMenu = imagenMenu;
-        
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Error guardando en BD' });
@@ -213,20 +209,15 @@ app.post('/api/update_catalog', async (req, res) => {
 app.post('/api/disconnect', async (req, res) => {
     const { clientId } = req.body;
     const sock = activeSessions[clientId];
-    
     if (sock) {
         try { sock.logout(); } catch(e) {}
         delete activeSessions[clientId];
     }
-    
     const { useMongoDBAuthState } = require('./mongoAuth');
     const authState = await useMongoDBAuthState(clientId);
     await authState.removeCreds();
-    
-    // Opcional: Eliminar la configuración de Mongo si se desvincula por no pago
     await ClientConfig.deleteOne({ clientId });
     delete clientConfigs[clientId];
-    
     res.json({ success: true });
 });
 
