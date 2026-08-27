@@ -6,7 +6,7 @@
     <title>Panel Admin - SaaS</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
-        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h1 { color: #075e54; text-align: center; }
         .card { border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
         input, select, textarea, button { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; }
@@ -18,13 +18,13 @@
         button.btn-update { background: #f0ad4e; margin-top: 5px; }
         button.btn-update:hover { background: #ec971f; }
         .code-box { font-size: 28px; font-weight: bold; color: #128c7e; text-align: center; margin: 15px 0; letter-spacing: 4px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+        th, td { padding: 12px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: middle; }
         th { background: #f8f9fa; }
         
         /* Modal de Edición */
         #editModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; }
-        .modal-content { background: white; margin: 5% auto; padding: 20px; width: 90%; max-width: 500px; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        .modal-content { background: white; margin: 5% auto; padding: 20px; width: 90%; max-width: 550px; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
         .img-preview { max-width: 100%; height: auto; max-height: 200px; margin-top: 10px; border-radius: 5px; display: none; }
     </style>
 </head>
@@ -37,24 +37,55 @@
             <input type="text" id="clientId" placeholder="ID del Cliente (ej: colmado_juan)">
             <input type="text" id="nombreLocal" placeholder="Nombre visible del local (ej: Colmado Los Muchachos)">
             <input type="text" id="phone" placeholder="Número del cliente (ej: 18091234567 sin +)">
+            
             <select id="tipoNegocio">
-                <option value="Colmado">1. Colmados y Drink</option>
-                <option value="Restaurante">2. Restaurantes y Pica Pollos</option>
+                <option value="" disabled selected>-- Selecciona el tipo de negocio --</option>
+                <optgroup label="Tier 1: Facturación Rápida">
+                    <option value="Colmados y Drink">1. Colmados y Drink</option>
+                    <option value="Restaurantes y Pica Pollos">2. Restaurantes y Pica Pollos</option>
+                    <option value="Farmacias de Barrio">3. Farmacias de Barrio</option>
+                    <option value="Salones y Barberías">4. Salones y Barberías</option>
+                    <option value="Ferreterías">5. Ferreterías</option>
+                </optgroup>
+                <optgroup label="Tier 2: Catálogo Pesado">
+                    <option value="Tiendas de Ropa/Calzados">6. Tiendas de Ropa/Calzados</option>
+                    <option value="Repuestos de Motos/Carros">7. Repuestos de Motos/Carros</option>
+                    <option value="Tiendas de Celulares">8. Tiendas de Celulares y Accesorios</option>
+                    <option value="Floristerías y Regalos">9. Floristerías y Regalos</option>
+                    <option value="Mueblerías y Colchones">10. Mueblerías y Colchones</option>
+                </optgroup>
+                <optgroup label="Tier 3: Servicios">
+                    <option value="Gyms">11. Gyms</option>
+                    <option value="Clínicas Dentales / Doctores">12. Clínicas Dentales / Doctores</option>
+                    <option value="Institutos y Cursos">13. Institutos y Cursos</option>
+                    <option value="Agencias de Viajes">14. Agencias de Viajes</option>
+                    <option value="Constructores / Plomeros">15. Constructores / Plomeros / Electricistas</option>
+                </optgroup>
+                <optgroup label="Tier 4: Oro en Santo Domingo">
+                    <option value="Dealers de Carros y Motos">16. Dealers de Carros y Motos</option>
+                    <option value="Inmobiliarias">17. Inmobiliarias</option>
+                    <option value="Eventos y Decoración">18. Eventos y Decoración</option>
+                    <option value="Belleza, Spa y Uñas">19. Belleza: Uñas, Pestañas, Spa</option>
+                    <option value="Proveedores B2B">20. Proveedores B2B</option>
+                </optgroup>
             </select>
+
             <textarea id="catalogoInicial" placeholder="Pega aquí el menú/catálogo inicial..."></textarea>
             <button onclick="connectClient()">Generar Código de 8 Dígitos</button>
             <div id="pairingCode" class="code-box"></div>
         </div>
 
         <div class="card">
-            <h3>2. Clientes Registrados y Gestión</h3>
-            <button onclick="loadStatus()" style="background: #007bff; margin-bottom: 10px;">Actualizar Lista</button>
+            <h3>2. Directorio de Clientes (Gestión de Catálogos)</h3>
+            <p style="font-size: 13px; color: #555;">Aquí verás la lista de los negocios vinculados con su número de teléfono. Usa el botón "Editar Menú y Foto" para actualizar sus productos.</p>
+            <button onclick="loadStatus()" style="background: #007bff; margin-bottom: 10px; width: 200px;">🔄 Actualizar Lista</button>
             <table id="clientsTable">
                 <thead>
                     <tr>
                         <th>Negocio</th>
+                        <th>Teléfono</th>
                         <th>Estado</th>
-                        <th>Acción</th>
+                        <th>Gestión del Bot</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -66,17 +97,17 @@
     <div id="editModal">
         <div class="modal-content">
             <h2 id="modalTitle">Editar Catálogo</h2>
-            <p style="font-size: 12px; color: #666;">Modifica los productos específicos de este negocio y adjunta su flyer.</p>
+            <p style="font-size: 13px; color: #666;">Modifica los productos y sube la foto (flyer) que se enviará automáticamente cuando pidan el menú.</p>
             
-            <textarea id="modalCatalog" rows="8" placeholder="Texto del catálogo (precios, productos)..."></textarea>
+            <textarea id="modalCatalog" rows="8" placeholder="Escribe los productos y precios actualizados aquí..."></textarea>
             
-            <label style="font-weight: bold; margin-top: 10px; display: block;">Subir Flyer/Foto del Menú (Opcional):</label>
+            <label style="font-weight: bold; margin-top: 15px; display: block;">📸 Subir Nuevo Flyer o Foto (Opcional):</label>
             <input type="file" id="modalImageUpload" accept="image/png, image/jpeg, image/jpg" onchange="previewImage(event)">
             <img id="modalPreview" class="img-preview" />
             
             <input type="hidden" id="modalClientId">
             
-            <button class="btn-update" onclick="saveCatalog()" style="margin-top: 20px;">Guardar Cambios en la BD</button>
+            <button class="btn-update" onclick="saveCatalog()" style="margin-top: 20px;">💾 Guardar Cambios en el Bot</button>
             <button onclick="closeModal()" style="background: #888;">Cancelar</button>
         </div>
     </div>
@@ -92,7 +123,7 @@
             const catalogo = document.getElementById('catalogoInicial').value.trim();
             const codeBox = document.getElementById('pairingCode');
             
-            if(!clientId || !phone || !nombreLocal) return alert('Faltan datos');
+            if(!clientId || !phone || !nombreLocal || !tipoNegocio) return alert('Faltan datos (ID, Nombre, Teléfono o Tipo)');
             
             codeBox.innerText = "Generando código... (Espera)";
             
@@ -123,12 +154,16 @@
             for(const [clientId, info] of Object.entries(status)) {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td><strong>${info.nombre}</strong><br><small>(${clientId})</small><br>
-                    <span style="font-size:11px; color:#555;">📸 Flyer: ${info.tieneImagen ? 'Sí' : 'No'}</span></td>
-                    <td style="color: ${info.state.includes('Activo') ? 'green' : 'orange'}">${info.state}</td>
                     <td>
-                        <button class="btn-update" onclick="openModal('${clientId}', \`${info.catalogo.replace(/`/g, '\\`')}\`)">Editar Catálogo y Foto</button>
-                        <button class="btn-danger" onclick="disconnectClient('${clientId}')">Desvincular (No pago)</button>
+                        <strong>${info.nombre}</strong><br>
+                        <small style="color: #666;">ID: ${clientId}</small><br>
+                        <span style="font-size:11px; color:#555;">📸 Flyer Activo: <b>${info.tieneImagen ? 'SÍ' : 'NO'}</b></span>
+                    </td>
+                    <td style="font-family: monospace; font-size: 15px;">📞 ${info.telefono}</td>
+                    <td style="color: ${info.state.includes('Activo') ? 'green' : 'orange'}"><b>${info.state}</b></td>
+                    <td>
+                        <button class="btn-update" onclick="openModal('${clientId}', \`${info.catalogo.replace(/`/g, '\\`')}\`)">✏️ Editar Menú y Foto</button>
+                        <button class="btn-danger" onclick="disconnectClient('${clientId}')">🚫 Desvincular (Corte)</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
@@ -136,7 +171,7 @@
         }
 
         function openModal(clientId, catalogo) {
-            document.getElementById('modalTitle').innerText = "Catálogo: " + clientId;
+            document.getElementById('modalTitle').innerText = "Gestión de: " + clientId;
             document.getElementById('modalClientId').value = clientId;
             document.getElementById('modalCatalog').value = catalogo;
             document.getElementById('modalImageUpload').value = "";
@@ -186,7 +221,7 @@
                 payload.imagenMenu = currentBase64Image;
             }
 
-            document.querySelector('#editModal .btn-update').innerText = "Guardando en BD...";
+            document.querySelector('#editModal .btn-update').innerText = "⏳ Guardando...";
             
             await fetch('/api/update_catalog', {
                 method: 'POST',
@@ -194,14 +229,14 @@
                 body: JSON.stringify(payload)
             });
             
-            document.querySelector('#editModal .btn-update').innerText = "Guardar Cambios en la BD";
+            document.querySelector('#editModal .btn-update').innerText = "💾 Guardar Cambios en el Bot";
             closeModal();
             loadStatus();
-            alert('¡Catálogo y foto actualizados!');
+            alert('¡Catálogo y foto actualizados con éxito!');
         }
 
         async function disconnectClient(clientId) {
-            if(!confirm(`¿Seguro que deseas cortar el servicio de ${clientId} por falta de pago?`)) return;
+            if(!confirm(`¿Seguro que deseas cortar el servicio de ${clientId} por falta de pago? El bot dejará de funcionar en su número.`)) return;
             await fetch('/api/disconnect', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

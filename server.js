@@ -20,12 +20,13 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 const activeSessions = {};
 const clientConfigs = {}; 
 const activeConversations = {}; 
-const CONVERSATION_TIMEOUT = 60 * 60 * 1000; // Aumentado a 1 hora
+const CONVERSATION_TIMEOUT = 60 * 60 * 1000;
 
 const configSchema = new mongoose.Schema({
     clientId: { type: String, unique: true },
     tipo: String,
     nombre: String,
+    telefono: String, // Añadido para mostrar el numero en la lista
     catalogo: String,
     imagenMenu: String
 });
@@ -41,6 +42,7 @@ async function connectDB() {
             clientConfigs[c.clientId] = {
                 tipo: c.tipo,
                 nombre: c.nombre,
+                telefono: c.telefono,
                 catalogo: c.catalogo,
                 imagenMenu: c.imagenMenu
             };
@@ -105,7 +107,6 @@ async function startClientSession(clientId, phoneNumber, res) {
         if (activeConversations[conversationKey] && (now - activeConversations[conversationKey] < CONVERSATION_TIMEOUT)) {
             isBusinessQuery = true;
         } else {
-            // Diccionario expandido para captar cualquier intencion de compra
             const triggerWords = [
                 'hola', 'buenas', 'saludo', 'menu', 'menú', 'catalogo', 'catálogo', 
                 'pedido', 'orden', 'delivery', 'precio', 'cuanto', 'cuánto', 
@@ -146,7 +147,6 @@ async function startClientSession(clientId, phoneNumber, res) {
             }
         }
 
-        // --- GEMINI AI CON REDUNDANCIA Y MANEJO DE ERRORES ---
         try {
             const prompt = `Eres un asistente de WhatsApp de la República Dominicana, súper amable, servicial y persuasivo.
             Trabajas en: ${nombreLocal} (Tipo: ${tipoNegocio})
@@ -168,24 +168,22 @@ async function startClientSession(clientId, phoneNumber, res) {
             await sock.sendMessage(sender, { text: respuestaIA });
         } catch (error) {
             console.error(`[ERROR GEMINI] Fallo en cliente ${clientId}:`, error);
-            // Mensaje de fallback elegante para no dejar al cliente en visto
             await sock.sendMessage(sender, { text: "⏳ _Estoy revisando el inventario, dame un momentito por favor..._" });
         }
     });
 }
 
-// ... ENDPOINTS API (Sin cambios)
 app.post('/api/connect', async (req, res) => {
     const { clientId, phoneNumber, tipoNegocio, nombreLocal, catalogo } = req.body;
     if (!clientId || !phoneNumber) return res.status(400).json({ error: 'Faltan datos' });
     
     await ClientConfig.findOneAndUpdate(
         { clientId },
-        { tipo: tipoNegocio, nombre: nombreLocal, catalogo: catalogo },
+        { tipo: tipoNegocio, nombre: nombreLocal, telefono: phoneNumber, catalogo: catalogo },
         { upsert: true, new: true }
     );
     
-    clientConfigs[clientId] = { tipo: tipoNegocio, nombre: nombreLocal, catalogo, imagenMenu: null };
+    clientConfigs[clientId] = { tipo: tipoNegocio, nombre: nombreLocal, telefono: phoneNumber, catalogo, imagenMenu: null };
     
     if (activeSessions[clientId] && activeSessions[clientId].authState.creds.me?.id) {
         return res.status(400).json({ error: 'El cliente ya está conectado' });
@@ -227,6 +225,7 @@ app.get('/api/status', (req, res) => {
         status[id] = {
             state: activeSessions[id]?.authState?.creds?.me?.id ? 'Conectado (Activo)' : 'Desconectado',
             nombre: config.nombre || 'Sin nombre',
+            telefono: config.telefono || 'Desconocido',
             catalogo: config.catalogo || '',
             tieneImagen: !!config.imagenMenu
         };
