@@ -7,7 +7,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { useMongoDBAuthState } = require('./mongoAuth');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Aumentado para permitir imagenes
 app.use(cors());
 app.use(express.static('public'));
 
@@ -18,14 +18,35 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 const activeSessions = {};
-const clientConfigs = {}; // Configuración de clientes (En el futuro a MongoDB)
-const activeConversations = {}; // Memoria temporal: { "clientId_sender": timestamp }
-const CONVERSATION_TIMEOUT = 30 * 60 * 1000; // 30 minutos
+const clientConfigs = {}; 
+const activeConversations = {}; 
+const CONVERSATION_TIMEOUT = 30 * 60 * 1000; 
+
+// ESQUEMA DE MONGODB PARA GUARDAR CONFIGURACIONES Y CATALOGOS
+const configSchema = new mongoose.Schema({
+    clientId: { type: String, unique: true },
+    tipo: String,
+    nombre: String,
+    catalogo: String,
+    imagenMenu: String // Guardaremos el flyer en Base64
+});
+const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig', configSchema);
 
 async function connectDB() {
     try {
         await mongoose.connect(MONGO_URI);
         console.log("Conectado a MongoDB");
+        
+        // Cargar configuraciones guardadas a la memoria
+        const configs = await ClientConfig.find();
+        for (const c of configs) {
+            clientConfigs[c.clientId] = {
+                tipo: c.tipo,
+                nombre: c.nombre,
+                catalogo: c.catalogo,
+                imagenMenu: c.imagenMenu
+            };
+        }
     } catch (e) {
         console.error("Error conectando a MongoDB:", e);
     }
@@ -83,11 +104,9 @@ async function startClientSession(clientId, phoneNumber, res) {
         const now = Date.now();
         let isBusinessQuery = false;
 
-        // FILTRO MEJORADO: Ver si ya está en una conversación activa (últimos 30 min)
         if (activeConversations[conversationKey] && (now - activeConversations[conversationKey] < CONVERSATION_TIMEOUT)) {
             isBusinessQuery = true;
         } else {
-            // Si no está en conversación, verificar si usó una palabra clave
             const triggerWords = [
                 'hola', 'buenas', 'saludo', 'menu', 'menú', 'catalogo', 'catálogo', 
                 'pedido', 'orden', 'delivery', 'precio', 'cuanto', 'cuánto', 
@@ -96,42 +115,51 @@ async function startClientSession(clientId, phoneNumber, res) {
             isBusinessQuery = triggerWords.some(kw => textoCliente.includes(kw));
         }
 
-        if (!isBusinessQuery) return; // Ignora mensajes personales
+        if (!isBusinessQuery) return; 
 
-        // Actualizar el temporizador de la conversación
         activeConversations[conversationKey] = now;
 
-        const tipoNegocio = clientConfigs[clientId]?.tipo || "Negocio";
-        const nombreLocal = clientConfigs[clientId]?.nombre || "Nuestro Local";
-        const catalogoLocal = clientConfigs[clientId]?.catalogo || "Catálogo en actualización.";
+        const config = clientConfigs[clientId] || {};
+        const tipoNegocio = config.tipo || "Negocio";
+        const nombreLocal = config.nombre || "Nuestro Local";
+        const catalogoLocal = config.catalogo || "Catálogo en actualización.";
+        const imagenMenu = config.imagenMenu || null;
 
-        // Reglas Fijas: Saludos (Solo si no pide menú explícitamente)
         const saludos = ['hola', 'buenas', 'saludos', 'buenos dias', 'buenas tardes', 'buenas noches'];
         if (saludos.some(s => textoCliente === s || textoCliente.startsWith(s + ' ')) && !textoCliente.includes('menu') && !textoCliente.includes('catalogo')) {
             return sock.sendMessage(sender, { text: `¡Hola! Gracias por comunicarte con *${nombreLocal}*. ¿En qué podemos servirte hoy? Escribe *menú* para ver nuestras opciones.` });
         }
 
-        // Reglas Fijas: Menú dinámico
         if (textoCliente.includes('menu') || textoCliente.includes('menú') || textoCliente.includes('catalogo') || textoCliente.includes('catálogo')) {
             let menuTxt = `📋 *CATÁLOGO DE ${nombreLocal.toUpperCase()}*\n\n${catalogoLocal}\n\n_Dime qué deseas pedir o si tienes alguna duda._`;
-            return sock.sendMessage(sender, { text: menuTxt });
+            
+            // Si hay una foto guardada en Mongo, enviarla junto con el texto
+            if (imagenMenu) {
+                try {
+                    const base64Data = imagenMenu.replace(/^data:image\/\w+;base64,/, "");
+                    const buffer = Buffer.from(base64Data, 'base64');
+                    return sock.sendMessage(sender, { image: buffer, caption: menuTxt });
+                } catch(e) {
+                    console.error("Error enviando imagen:", e);
+                    return sock.sendMessage(sender, { text: menuTxt });
+                }
+            } else {
+                return sock.sendMessage(sender, { text: menuTxt });
+            }
         }
 
-        // Gemini AI para continuar la conversación con contexto del catálogo
         try {
             const prompt = `Eres un asistente de WhatsApp de la República Dominicana, amable y persuasivo.
             Trabajas en: ${nombreLocal} (Tipo: ${tipoNegocio})
-            
-            Este es tu CATÁLOGO DE PRODUCTOS ACTUAL:
-            ${catalogoLocal}
+            Catálogo Actual: ${catalogoLocal}
 
             El cliente dice: "${textoCliente}". 
             
-            REGLAS ESTRICTAS:
+            REGLAS:
             1. Responde en un solo párrafo corto y amigable.
-            2. BASA TUS RESPUESTAS EN EL CATÁLOGO. Si el cliente pide un producto o precio, búscalo en el catálogo y dáselo.
-            3. Si pide algo que no está en el catálogo, dile amablemente que por ahora no tienen eso disponible y ofrécele algo similar.
-            4. Si el cliente está pidiendo, confirma su orden y pregúntale su dirección de envío (si aplica).`;
+            2. Basa tus respuestas en el catálogo.
+            3. Si pide algo que no está en el catálogo, dile que no hay y ofrece algo similar.
+            4. Si está pidiendo, confirma su orden y pregunta su dirección.`;
             
             const result = await model.generateContent(prompt);
             const respuestaIA = result.response.text().trim();
@@ -143,16 +171,18 @@ async function startClientSession(clientId, phoneNumber, res) {
     });
 }
 
-// ENDPOINTS API
 app.post('/api/connect', async (req, res) => {
     const { clientId, phoneNumber, tipoNegocio, nombreLocal, catalogo } = req.body;
     if (!clientId || !phoneNumber) return res.status(400).json({ error: 'Faltan datos' });
     
-    clientConfigs[clientId] = { 
-        tipo: tipoNegocio || "Negocio", 
-        nombre: nombreLocal || "Mi Negocio",
-        catalogo: catalogo || "Catálogo en actualización."
-    };
+    // Guardar o actualizar en MongoDB
+    await ClientConfig.findOneAndUpdate(
+        { clientId },
+        { tipo: tipoNegocio, nombre: nombreLocal, catalogo: catalogo },
+        { upsert: true, new: true }
+    );
+    
+    clientConfigs[clientId] = { tipo: tipoNegocio, nombre: nombreLocal, catalogo, imagenMenu: null };
     
     if (activeSessions[clientId] && activeSessions[clientId].authState.creds.me?.id) {
         return res.status(400).json({ error: 'El cliente ya está conectado' });
@@ -160,13 +190,23 @@ app.post('/api/connect', async (req, res) => {
     startClientSession(clientId, phoneNumber, res);
 });
 
-app.post('/api/update_catalog', (req, res) => {
-    const { clientId, catalogo } = req.body;
-    if (clientConfigs[clientId]) {
+app.post('/api/update_catalog', async (req, res) => {
+    const { clientId, catalogo, imagenMenu } = req.body;
+    
+    try {
+        await ClientConfig.findOneAndUpdate(
+            { clientId },
+            { catalogo, imagenMenu },
+            { upsert: true }
+        );
+        
+        if (!clientConfigs[clientId]) clientConfigs[clientId] = {};
         clientConfigs[clientId].catalogo = catalogo;
+        if(imagenMenu !== undefined) clientConfigs[clientId].imagenMenu = imagenMenu;
+        
         res.json({ success: true });
-    } else {
-        res.status(404).json({ error: 'Cliente no encontrado en memoria' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error guardando en BD' });
     }
 });
 
@@ -183,16 +223,21 @@ app.post('/api/disconnect', async (req, res) => {
     const authState = await useMongoDBAuthState(clientId);
     await authState.removeCreds();
     
+    // Opcional: Eliminar la configuración de Mongo si se desvincula por no pago
+    await ClientConfig.deleteOne({ clientId });
+    delete clientConfigs[clientId];
+    
     res.json({ success: true });
 });
 
 app.get('/api/status', (req, res) => {
     const status = {};
-    for (const [id, sock] of Object.entries(activeSessions)) {
+    for (const [id, config] of Object.entries(clientConfigs)) {
         status[id] = {
-            state: sock.authState.creds.me?.id ? 'Conectado (Activo)' : 'Esperando Código...',
-            nombre: clientConfigs[id]?.nombre || 'Sin nombre',
-            catalogo: clientConfigs[id]?.catalogo || ''
+            state: activeSessions[id]?.authState?.creds?.me?.id ? 'Conectado (Activo)' : 'Desconectado',
+            nombre: config.nombre || 'Sin nombre',
+            catalogo: config.catalogo || '',
+            tieneImagen: !!config.imagenMenu
         };
     }
     res.json(status);
@@ -203,8 +248,6 @@ async function reactivarSesiones() {
         const Auth = mongoose.models.Auth || mongoose.model('Auth');
         const sesiones = await Auth.distinct('clientId');
         for (const clientId of sesiones) {
-            // Valores por defecto al reiniciar (en un SaaS real, leeríamos clientConfigs de MongoDB)
-            clientConfigs[clientId] = { tipo: "Negocio Reactivado", nombre: clientId, catalogo: "Contacte al admin para actualizar catálogo." };
             startClientSession(clientId, null, null);
         }
     } catch(e) {}

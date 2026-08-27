@@ -6,7 +6,7 @@
     <title>Panel Admin - SaaS</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h1 { color: #075e54; text-align: center; }
         .card { border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
         input, select, textarea, button { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; }
@@ -15,12 +15,17 @@
         button:hover { background: #075e54; }
         button.btn-danger { background: #d9534f; margin-top: 5px; }
         button.btn-danger:hover { background: #c9302c; }
-        button.btn-update { background: #f0ad4e; }
+        button.btn-update { background: #f0ad4e; margin-top: 5px; }
         button.btn-update:hover { background: #ec971f; }
         .code-box { font-size: 28px; font-weight: bold; color: #128c7e; text-align: center; margin: 15px 0; letter-spacing: 4px; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
         th { background: #f8f9fa; }
+        
+        /* Modal de Edición */
+        #editModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; }
+        .modal-content { background: white; margin: 5% auto; padding: 20px; width: 90%; max-width: 500px; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        .img-preview { max-width: 100%; height: auto; max-height: 200px; margin-top: 10px; border-radius: 5px; display: none; }
     </style>
 </head>
 <body>
@@ -32,41 +37,11 @@
             <input type="text" id="clientId" placeholder="ID del Cliente (ej: colmado_juan)">
             <input type="text" id="nombreLocal" placeholder="Nombre visible del local (ej: Colmado Los Muchachos)">
             <input type="text" id="phone" placeholder="Número del cliente (ej: 18091234567 sin +)">
-            
             <select id="tipoNegocio">
-                <option value="" disabled selected>-- Selecciona un Negocio --</option>
-                <optgroup label="Tier 1: Facturación Rápida">
-                    <option value="Colmado/Drink">1. Colmados y Drink</option>
-                    <option value="Restaurante/Pica Pollo">2. Restaurantes y Pica Pollos</option>
-                    <option value="Farmacia">3. Farmacias de Barrio</option>
-                    <option value="Salón/Barbería">4. Salones y Barberías</option>
-                    <option value="Ferretería">5. Ferreterías</option>
-                </optgroup>
-                <optgroup label="Tier 2: Catálogo Pesado">
-                    <option value="Tienda Ropa/Calzado">6. Tiendas de Ropa/Calzados</option>
-                    <option value="Repuestos">7. Repuestos de Motos/Carros</option>
-                    <option value="Celulares/Accesorios">8. Tiendas de Celulares y Accesorios</option>
-                    <option value="Floristería/Regalos">9. Floristerías y Regalos</option>
-                    <option value="Mueblería/Colchones">10. Mueblerías y Colchones</option>
-                </optgroup>
-                <optgroup label="Tier 3: Servicios">
-                    <option value="Gym">11. Gyms</option>
-                    <option value="Clínica/Doctor">12. Clínicas Dentales / Doctores</option>
-                    <option value="Instituto/Cursos">13. Institutos y Cursos</option>
-                    <option value="Agencia Viajes">14. Agencias de Viajes</option>
-                    <option value="Constructor/Plomero">15. Constructores / Plomeros / Electricistas</option>
-                </optgroup>
-                <optgroup label="Tier 4: Oro (Santo Domingo)">
-                    <option value="Dealer Vehículos">16. Dealers de Carros y Motos</option>
-                    <option value="Inmobiliaria">17. Inmobiliarias</option>
-                    <option value="Eventos/Decoración">18. Eventos y Decoración</option>
-                    <option value="Belleza/Spa">19. Belleza: Uñas, Pestañas, Spa</option>
-                    <option value="Proveedor B2B">20. Proveedores B2B</option>
-                </optgroup>
+                <option value="Colmado">1. Colmados y Drink</option>
+                <option value="Restaurante">2. Restaurantes y Pica Pollos</option>
             </select>
-
-            <textarea id="catalogoInicial" placeholder="Pega aquí el menú/catálogo inicial con sus precios y emojis (ej: 🍗 Pica Pollo $250)"></textarea>
-            
+            <textarea id="catalogoInicial" placeholder="Pega aquí el menú/catálogo inicial..."></textarea>
             <button onclick="connectClient()">Generar Código de 8 Dígitos</button>
             <div id="pairingCode" class="code-box"></div>
         </div>
@@ -79,7 +54,6 @@
                     <tr>
                         <th>Negocio</th>
                         <th>Estado</th>
-                        <th>Catálogo</th>
                         <th>Acción</th>
                     </tr>
                 </thead>
@@ -88,7 +62,28 @@
         </div>
     </div>
 
+    <!-- Modal para Editar Catálogo y Subir Fotos -->
+    <div id="editModal">
+        <div class="modal-content">
+            <h2 id="modalTitle">Editar Catálogo</h2>
+            <p style="font-size: 12px; color: #666;">Modifica los productos específicos de este negocio y adjunta su flyer.</p>
+            
+            <textarea id="modalCatalog" rows="8" placeholder="Texto del catálogo (precios, productos)..."></textarea>
+            
+            <label style="font-weight: bold; margin-top: 10px; display: block;">Subir Flyer/Foto del Menú (Opcional):</label>
+            <input type="file" id="modalImageUpload" accept="image/png, image/jpeg, image/jpg" onchange="previewImage(event)">
+            <img id="modalPreview" class="img-preview" />
+            
+            <input type="hidden" id="modalClientId">
+            
+            <button class="btn-update" onclick="saveCatalog()" style="margin-top: 20px;">Guardar Cambios en la BD</button>
+            <button onclick="closeModal()" style="background: #888;">Cancelar</button>
+        </div>
+    </div>
+
     <script>
+        let currentBase64Image = null;
+
         async function connectClient() {
             const clientId = document.getElementById('clientId').value.trim();
             const nombreLocal = document.getElementById('nombreLocal').value.trim();
@@ -97,9 +92,9 @@
             const catalogo = document.getElementById('catalogoInicial').value.trim();
             const codeBox = document.getElementById('pairingCode');
             
-            if(!clientId || !phone || !nombreLocal || !tipoNegocio) return alert('Llena todos los campos requeridos');
+            if(!clientId || !phone || !nombreLocal) return alert('Faltan datos');
             
-            codeBox.innerText = "Generando código... (Espera 3 segundos)";
+            codeBox.innerText = "Generando código... (Espera)";
             
             try {
                 const res = await fetch('/api/connect', {
@@ -115,50 +110,98 @@
                 } else if(data.message) {
                     codeBox.innerText = data.message;
                     loadStatus();
-                } else {
-                    codeBox.innerText = "Error: " + data.error;
                 }
-            } catch(e) {
-                codeBox.innerText = "Error de conexión";
-            }
+            } catch(e) { codeBox.innerText = "Error de conexión"; }
         }
 
         async function loadStatus() {
             const res = await fetch('/api/status');
             const status = await res.json();
-            
             const tbody = document.querySelector('#clientsTable tbody');
             tbody.innerHTML = '';
             
             for(const [clientId, info] of Object.entries(status)) {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td><strong>${info.nombre}</strong><br><small>(${clientId})</small></td>
+                    <td><strong>${info.nombre}</strong><br><small>(${clientId})</small><br>
+                    <span style="font-size:11px; color:#555;">📸 Flyer: ${info.tieneImagen ? 'Sí' : 'No'}</span></td>
                     <td style="color: ${info.state.includes('Activo') ? 'green' : 'orange'}">${info.state}</td>
                     <td>
-                        <textarea id="cat_${clientId}" rows="3" style="width: 150px; font-size: 11px;">${info.catalogo}</textarea><br>
-                        <button class="btn-update" onclick="updateCatalog('${clientId}')" style="padding: 5px; font-size: 11px;">Actualizar Catálogo</button>
-                    </td>
-                    <td>
-                        <button class="btn-danger" onclick="disconnectClient('${clientId}')" style="padding: 5px; font-size: 12px;">Desvincular (No pago)</button>
+                        <button class="btn-update" onclick="openModal('${clientId}', \`${info.catalogo.replace(/`/g, '\\`')}\`)">Editar Catálogo y Foto</button>
+                        <button class="btn-danger" onclick="disconnectClient('${clientId}')">Desvincular (No pago)</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
             }
         }
 
-        async function updateCatalog(clientId) {
-            const newCatalog = document.getElementById(`cat_${clientId}`).value;
+        function openModal(clientId, catalogo) {
+            document.getElementById('modalTitle').innerText = "Catálogo: " + clientId;
+            document.getElementById('modalClientId').value = clientId;
+            document.getElementById('modalCatalog').value = catalogo;
+            document.getElementById('modalImageUpload').value = "";
+            document.getElementById('modalPreview').style.display = "none";
+            currentBase64Image = null; 
+            document.getElementById('editModal').style.display = "block";
+        }
+
+        function closeModal() {
+            document.getElementById('editModal').style.display = "none";
+        }
+
+        function previewImage(event) {
+            const file = event.target.files[0];
+            if(!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const MAX_WIDTH = 800; 
+                    const scaleSize = MAX_WIDTH / img.width;
+                    canvas.width = MAX_WIDTH;
+                    canvas.height = img.height * scaleSize;
+                    
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    
+                    currentBase64Image = canvas.toDataURL('image/jpeg', 0.6);
+                    
+                    const preview = document.getElementById('modalPreview');
+                    preview.src = currentBase64Image;
+                    preview.style.display = "block";
+                }
+                img.src = e.target.result;
+            }
+            reader.readAsDataURL(file);
+        }
+
+        async function saveCatalog() {
+            const clientId = document.getElementById('modalClientId').value;
+            const catalogo = document.getElementById('modalCatalog').value;
+            
+            const payload = { clientId, catalogo };
+            if (currentBase64Image) {
+                payload.imagenMenu = currentBase64Image;
+            }
+
+            document.querySelector('#editModal .btn-update').innerText = "Guardando en BD...";
+            
             await fetch('/api/update_catalog', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ clientId, catalogo: newCatalog })
+                body: JSON.stringify(payload)
             });
-            alert('Catálogo actualizado exitosamente para ' + clientId);
+            
+            document.querySelector('#editModal .btn-update').innerText = "Guardar Cambios en la BD";
+            closeModal();
+            loadStatus();
+            alert('¡Catálogo y foto actualizados!');
         }
 
         async function disconnectClient(clientId) {
-            if(!confirm('¿Seguro que deseas cortar el servicio de ' + clientId + '? Esta acción borra su sesión.')) return;
+            if(!confirm(`¿Seguro que deseas cortar el servicio de ${clientId} por falta de pago?`)) return;
             await fetch('/api/disconnect', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
