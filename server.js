@@ -350,6 +350,15 @@ app.post('/api/toggle-status', async (req, res) => {
     }
 });
 
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        uptime: process.uptime(),
+        sesiones: Object.keys(activeSessions).length,
+        configs: Object.keys(clientConfigs).length
+    });
+});
+
 app.get('/api/status', (req, res) => {
     const status = {};
     for (const [id, config] of Object.entries(clientConfigs)) {
@@ -369,10 +378,14 @@ async function reactivarSesiones() {
     try {
         const Auth = mongoose.models.Auth || mongoose.model('Auth');
         const sesiones = await Auth.distinct('clientId');
+        console.log('[REACTIVAR] Encontradas ' + sesiones.length + ' sesiones para reconectar');
         for (const clientId of sesiones) {
+            console.log('[REACTIVAR] Reconectando cliente: ' + clientId);
             startClientSession(clientId, null, null);
         }
-    } catch(e) {}
+    } catch(e) {
+        console.error('[REACTIVAR] Error:', e.message);
+    }
 }
 
 const PORT = process.env.PORT || 3000;
@@ -382,4 +395,15 @@ app.listen(PORT, async () => {
         await connectDB();
         reactivarSesiones();
     }
+    
+    // KEEP-ALIVE: ping interno cada 4 minutos para evitar que Render duerma
+    const selfUrl = process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + PORT;
+    setInterval(async () => {
+        try {
+            const resp = await fetch(selfUrl + '/health');
+            console.log('[KEEP-ALIVE] Ping a ' + selfUrl + '/health - Status: ' + resp.status);
+        } catch(e) {
+            console.log('[KEEP-ALIVE] Ping local');
+        }
+    }, 4 * 60 * 1000);
 });
