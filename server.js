@@ -59,15 +59,29 @@ async function handleWithGroq(textoCliente, idNegocio) {
     const nombreNegocio = config?.nombre || "el negocio";
     const tipoNegocio = config?.tipo || "tienda";
     const productos = config?.productos || [];
+    const catalogo = config?.catalogo || "";
 
-    const systemPrompt = 'Eres el asistente de atencion al cliente de: ' + nombreNegocio + '. ' +
-        'Tipo de negocio: ' + tipoNegocio + '. ' +
-        'Responde amable, corto, en español dominicano. ' +
-        'Usa solo la info de estos productos: ' + JSON.stringify(productos) + '. ' +
-        'Si no esta el producto, di que no lo tenemos. ' +
-        'Maximo 1 emoji. Nunca digas que eres IA o robot. ' +
-        'Eres el asistente de ' + nombreNegocio + '. ' +
-        'Nunca uses mayusculas en todo el mensaje. Nunca mandes links.';
+    let systemPrompt;
+    if (productos.length > 0 || catalogo) {
+        systemPrompt = 'Eres el asistente de atencion al cliente de: ' + nombreNegocio + '. ' +
+            'Tipo de negocio: ' + tipoNegocio + '. ' +
+            'Responde amable, corto, en español dominicano. ' +
+            'Catalogo: ' + (catalogo || JSON.stringify(productos)) + '. ' +
+            'Usa SOLO la info de esos productos para responder. ' +
+            'Si preguntan por algo que no esta, di que no lo tenemos por ahora. ' +
+            'Maximo 1 emoji. Nunca digas que eres IA o robot. ' +
+            'Nunca uses mayusculas en todo el mensaje. Nunca mandes links.';
+    } else {
+        systemPrompt = 'Eres el asistente de atencion al cliente de: ' + nombreNegocio + '. ' +
+            'Tipo de negocio: ' + tipoNegocio + '. ' +
+            'Responde amable, corto, en español dominicano. ' +
+            'Aun no tenemos un catalogo de productos cargado, pero igual atiende al cliente con respeto. ' +
+            'Si preguntan por productos, di que pronto tendremos el catalogo disponible. ' +
+            'Si preguntan horario o ubicacion, responde que pronto tendremos esa info. ' +
+            'Mantener la conversacion amable y breve. ' +
+            'Maximo 1 emoji. Nunca digas que eres IA o robot. ' +
+            'Nunca uses mayusculas en todo el mensaje. Nunca mandes links.';
+    }
 
     console.log('Llamando a Groq con:', textoCliente);
     console.log('Modelo:', GROQ_MODEL);
@@ -141,7 +155,11 @@ async function startClientSession(clientId, phoneNumber, res) {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ['Ubuntu', 'Chrome', '20.0.04']
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        connectTimeoutMs: 20000,
+        keepAliveIntervalMs: 30000,
+        retryRequestDelayMs: 2000,
+        defaultQueryTimeoutMs: 60000
     });
 
     activeSessions[clientId] = sock;
@@ -183,9 +201,12 @@ async function startClientSession(clientId, phoneNumber, res) {
                     });
                 }, delay);
             } else {
-                await removeCreds();
+                console.log('[SESION] Cliente ' + clientId + ' fue desconectado (loggedOut). NO se borran creds - se reintentara mas tarde.');
                 delete activeSessions[clientId];
-                console.log('[SESION ELIMINADA] Cliente ' + clientId + ' cerro sesion manualmente.');
+                // Reintentar conexion despues de 2 minutos
+                setTimeout(function() {
+                    startClientSession(clientId, null, null);
+                }, 120000);
             }
         }
     });
@@ -508,14 +529,15 @@ app.listen(PORT, async () => {
         reactivarSesiones();
     }
     
-    // KEEP-ALIVE: ping interno cada 4 minutos para evitar que Render duerma
-    const selfUrl = process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + PORT;
+    // KEEP-ALIVE: ping cada 3 minutos para evitar que Render duerma
+    const selfUrl = process.env.RENDER_EXTERNAL_URL || 'https://proyecto-sass-catalogobotrd-0-3.onrender.com';
     setInterval(async () => {
         try {
             const resp = await fetch(selfUrl + '/health');
             console.log('[KEEP-ALIVE] Ping a ' + selfUrl + '/health - Status: ' + resp.status);
         } catch(e) {
-            console.log('[KEEP-ALIVE] Ping local');
+            console.log('[KEEP-ALIVE] Ping local - ' + e.message);
+            try { await fetch('http://localhost:' + PORT + '/health'); } catch(e2) {}
         }
-    }, 4 * 60 * 1000);
+    }, 3 * 60 * 1000);
 });
