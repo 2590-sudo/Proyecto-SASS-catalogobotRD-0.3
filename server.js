@@ -190,14 +190,6 @@ async function startClientSession(clientId, phoneNumber, res) {
         }
     });
 
-    // Listener de TODOS los eventos para debug
-    sock.ev.process(async (events) => {
-        if (events['messages.upsert']) console.log('[EVENT] messages.upsert DETECTADO');
-        if (events['messages.update']) console.log('[EVENT] messages.update');
-        if (events['connection.update']) console.log('[EVENT] connection.update');
-        if (events['creds.update']) {} // silencioso, pasa mucho
-    });
-
     sock.ev.on('messages.upsert', async ({ messages }) => {
         console.log('[MSG EVENT] Evento messages.upsert disparado, mensajes:', messages.length);
         const msg = messages[0];
@@ -367,8 +359,8 @@ app.post('/api/toggle-status', async (req, res) => {
     }
 });
 
-app.get('/test-msg/:clientId', async (req, res) => {
-    const clientId = req.params.clientId;
+app.get('/test-msg', async (req, res) => {
+    const clientId = req.query.clientId || Object.keys(activeSessions)[0];
     const sock = activeSessions[clientId];
     if (!sock) return res.json({ error: 'No hay sesion activa para ' + clientId });
     
