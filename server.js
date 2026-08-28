@@ -359,6 +359,51 @@ app.post('/api/toggle-status', async (req, res) => {
     }
 });
 
+app.get('/debug', async (req, res) => {
+    const debug = {
+        node_version: process.version,
+        fetch_disponible: typeof fetch !== 'undefined',
+        groq_api_key: GROQ_API_KEY ? 'SI (' + GROQ_API_KEY.substring(0, 10) + '...)' : 'NO - FALTA EN RENDER',
+        groq_model: GROQ_MODEL,
+        mongo_configurado: MONGO_URI !== 'URL_DE_MONGO_AQUI' ? 'SI' : 'NO',
+        sesiones_activas: Object.keys(activeSessions).length,
+        configs_cargadas: Object.keys(clientConfigs).length,
+        test_groq: null
+    };
+    
+    // Probar Groq directamente
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(GROQ_URL, {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + GROQ_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: GROQ_MODEL,
+                messages: [{ role: 'user', content: 'hola' }],
+                max_tokens: 20
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        const data = await resp.json();
+        if (data.choices) {
+            debug.test_groq = 'OK - Respuesta: ' + data.choices[0].message.content;
+        } else if (data.error) {
+            debug.test_groq = 'ERROR: ' + data.error.message;
+        } else {
+            debug.test_groq = 'Respuesta inesperada: ' + JSON.stringify(data).substring(0, 200);
+        }
+    } catch(e) {
+        debug.test_groq = 'FALLO: ' + e.message;
+    }
+    
+    res.json(debug);
+});
+
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
