@@ -25,6 +25,7 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const activeSessions = {};
 const clientConfigs = {}; 
 const activeConversations = {}; 
+const reconnectAttempts = {}; 
 const CONVERSATION_TIMEOUT = 60 * 60 * 1000;
 
 const configSchema = new mongoose.Schema({
@@ -170,12 +171,25 @@ async function startClientSession(clientId, phoneNumber, res) {
             }
         }
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log('[DESCONEXION] Cliente ' + clientId + ' cayo. Codigo: ' + statusCode + '. Reconectando...');
             if (shouldReconnect) {
-                setTimeout(function() { startClientSession(clientId); }, 5000);
+                if (!reconnectAttempts[clientId]) reconnectAttempts[clientId] = 0;
+                reconnectAttempts[clientId]++;
+                const delay = Math.min(5000 * reconnectAttempts[clientId], 60000);
+                console.log('[RECONEXION] Cliente ' + clientId + ' intento #' + reconnectAttempts[clientId] + ' en ' + delay + 'ms');
+                setTimeout(function() {
+                    startClientSession(clientId).then(function() {
+                        reconnectAttempts[clientId] = 0;
+                    }).catch(function(e) {
+                        console.error('[RECONEXION ERROR] Cliente ' + clientId + ':', e.message);
+                    });
+                }, delay);
             } else {
                 await removeCreds();
                 delete activeSessions[clientId];
+                console.log('[SESION ELIMINADA] Cliente ' + clientId + ' cerro sesion manualmente.');
             }
         }
     });
@@ -190,24 +204,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         if (!textoCliente) return;
 
         const conversationKey = clientId + '_' + sender;
-        const now = Date.now();
-        let isBusinessQuery = false;
-
-        if (activeConversations[conversationKey] && (now - activeConversations[conversationKey] < CONVERSATION_TIMEOUT)) {
-            isBusinessQuery = true;
-        } else {
-            const triggerWords = [
-                'hola', 'buenas', 'saludo', 'menu', 'catalogo', 
-                'pedido', 'orden', 'delivery', 'precio', 'cuanto', 
-                'a como', 'tiene', 'venden', 'comprar', 'info', 'direccion', 'ubicacion',
-                'quiero', 'dame', 'necesito', 'busco', 'tienen', 'hay', 'deseo', 'mandame'
-            ];
-            isBusinessQuery = triggerWords.some(function(kw) { return textoCliente.includes(kw); });
-        }
-
-        if (!isBusinessQuery) return; 
-
-        activeConversations[conversationKey] = now;
+        activeConversations[conversationKey] = Date.now();
 
         const config = clientConfigs[clientId] || {};
         if (config.activo === false) {
