@@ -6,7 +6,6 @@ const { default: makeWASocket, DisconnectReason } = require('@whiskeysockets/bai
 const pino = require('pino');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { Groq } = require('groq-sdk');
 const { useMongoDBAuthState } = require('./mongoAuth');
 
 const app = express();
@@ -20,6 +19,8 @@ app.use(express.static('public'));
 
 const MONGO_URI = process.env.MONGO_URI || "URL_DE_MONGO_AQUI";
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+const GROQ_MODEL = "openai/gpt-oss-20b";
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const activeSessions = {};
 const clientConfigs = {}; 
@@ -40,7 +41,6 @@ const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfi
 
 // === CEREBRO GROQ - TODO PASA POR AQUI ===
 async function handleWithGroq(textoCliente, idNegocio) {
-    // Leer datos del negocio desde MongoDB
     let config = clientConfigs[idNegocio];
     if (!config) {
         const dbConfig = await ClientConfig.findOne({ clientId: idNegocio });
@@ -59,27 +59,44 @@ async function handleWithGroq(textoCliente, idNegocio) {
     const tipoNegocio = config?.tipo || "tienda";
     const productos = config?.productos || [];
 
-    const systemPrompt = 'Eres el asistente de ATENCION AL CLIENTE de: ' + nombreNegocio + '. ' +
+    const systemPrompt = 'Eres el asistente de atencion al cliente de: ' + nombreNegocio + '. ' +
         'Tipo de negocio: ' + tipoNegocio + '. ' +
-        'Responde amable, corto, en español dominicano. Usa solo la info de estos productos: ' + JSON.stringify(productos) + '. ' +
+        'Responde amable, corto, en español dominicano. ' +
+        'Usa solo la info de estos productos: ' + JSON.stringify(productos) + '. ' +
         'Si no esta el producto, di que no lo tenemos. ' +
-        'Maximo 1 emoji. Nunca digas que eres IA o robot. Eres el asistente de ' + nombreNegocio + '. ' +
-        'Nunca uses MAYUSCULAS. Nunca mandes links.';
+        'Maximo 1 emoji. Nunca digas que eres IA o robot. ' +
+        'Eres el asistente de ' + nombreNegocio + '. ' +
+        'Nunca uses mayusculas en todo el mensaje. Nunca mandes links.';
 
     console.log('Llamando a Groq con:', textoCliente);
+    console.log('Modelo:', GROQ_MODEL);
+    console.log('Negocio:', nombreNegocio, '- Productos:', productos.length);
 
-    const groq = new Groq({ apiKey: GROQ_API_KEY });
-    const completion = await groq.chat.completions.create({
-        messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: textoCliente }
-        ],
-        model: "llama-3.1-8b-instant",
-        temperature: 0.7,
-        max_tokens: 300
+    const response = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + GROQ_API_KEY,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model: GROQ_MODEL,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: textoCliente }
+            ],
+            temperature: 0.7,
+            max_tokens: 300
+        })
     });
 
-    return completion.choices[0].message.content;
+    if (!response.ok) {
+        const errBody = await response.text();
+        console.error('[GROQ HTTP ERROR]', response.status, errBody);
+        throw new Error('Groq HTTP ' + response.status + ': ' + errBody);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content.trim();
 }
 
 async function connectDB() {
@@ -202,6 +219,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         // === TODO VA A GROQ - SIN MENSAJES FIJOS ===
         try {
             const respuestaIA = await handleWithGroq(textoCliente, clientId);
+            console.log('[GROQ RESPUESTA]', respuestaIA);
             await sock.sendMessage(sender, { text: respuestaIA });
         } catch (error) {
             console.error('[ERROR GROQ] Fallo en cliente ' + clientId + ':', error.message);
