@@ -387,15 +387,18 @@ async function startClientSession(clientId, phoneNumber, res) {
             await sock.sendMessage(sender, { text: respuestaIA });
             console.log('[HANDLER] Respuesta enviada OK');
 
-            // === FIX: ENVIAR FOTOS DE PRODUCTOS ===
+            // === FIX: ENVIAR FOTOS DE PRODUCTOS (SOLO SI LO PIDEN) ===
             const productos = config.productos || [];
             const aiResponseLower = respuestaIA.toLowerCase();
             const clientMsgLower = textoLower;
             let photosSent = 0;
             
+            const palabrasFoto = ['foto', 'imagen', 'ver', 'muestrame', 'muéstrame', 'ensename', 'enséñame', 'catálogo', 'catalogo'];
+            const clientePideFoto = palabrasFoto.some(w => clientMsgLower.includes(w));
+            
             for (const p of productos) {
                 const nombreLower = p.nombre.toLowerCase();
-                if (p.imagen && (aiResponseLower.includes(nombreLower) || clientMsgLower.includes(nombreLower))) {
+                if (clientePideFoto && p.imagen && (aiResponseLower.includes(nombreLower) || clientMsgLower.includes(nombreLower))) {
                     if (photosSent >= 2) break; // Limit to max 2 images per response
                     try {
                         const base64Data = p.imagen.replace(/^data:image\/\w+;base64,/, "");
