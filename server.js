@@ -359,6 +359,31 @@ app.post('/api/toggle-status', async (req, res) => {
     }
 });
 
+app.get('/restart-session', async (req, res) => {
+    const clientId = req.query.clientId || Object.keys(activeSessions)[0];
+    if (!clientId) return res.json({ error: 'No hay sesiones activas' });
+    
+    try {
+        const oldSock = activeSessions[clientId];
+        if (oldSock) {
+            console.log('[RESTART] Cerrando sesion vieja de ' + clientId);
+            try { await oldSock.logout(); } catch(e) {}
+            try { oldSock.end && oldSock.end(); } catch(e) {}
+            delete activeSessions[clientId];
+        }
+        
+        console.log('[RESTART] Iniciando nueva sesion para ' + clientId);
+        await startClientSession(clientId, null, null);
+        
+        res.json({ 
+            status: 'OK', 
+            mensaje: 'Sesion reiniciada para ' + clientId + '. El bot deberia responder ahora.' 
+        });
+    } catch(e) {
+        res.json({ error: e.message });
+    }
+});
+
 app.get('/test-msg', async (req, res) => {
     const clientId = req.query.clientId || Object.keys(activeSessions)[0];
     const sock = activeSessions[clientId];
