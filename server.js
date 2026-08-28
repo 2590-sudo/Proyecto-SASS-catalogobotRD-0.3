@@ -190,6 +190,14 @@ async function startClientSession(clientId, phoneNumber, res) {
         }
     });
 
+    // Listener de TODOS los eventos para debug
+    sock.ev.process(async (events) => {
+        if (events['messages.upsert']) console.log('[EVENT] messages.upsert DETECTADO');
+        if (events['messages.update']) console.log('[EVENT] messages.update');
+        if (events['connection.update']) console.log('[EVENT] connection.update');
+        if (events['creds.update']) {} // silencioso, pasa mucho
+    });
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
         console.log('[MSG EVENT] Evento messages.upsert disparado, mensajes:', messages.length);
         const msg = messages[0];
@@ -356,6 +364,34 @@ app.post('/api/toggle-status', async (req, res) => {
         }
     } catch(e) {
         res.status(500).json({ error: 'Error BD' });
+    }
+});
+
+app.get('/test-msg/:clientId', async (req, res) => {
+    const clientId = req.params.clientId;
+    const sock = activeSessions[clientId];
+    if (!sock) return res.json({ error: 'No hay sesion activa para ' + clientId });
+    
+    try {
+        // Probar Groq
+        const respuesta = await handleWithGroq('hola, que flores tienes?', clientId);
+        
+        // Buscar el telefono del dueno
+        const config = clientConfigs[clientId] || {};
+        const telefono = config.telefono;
+        if (!telefono) return res.json({ error: 'No hay telefono configurado', groq_ok: respuesta });
+        
+        const jid = telefono.includes('@s.whatsapp.net') ? telefono : telefono + '@s.whatsapp.net';
+        await sock.sendMessage(jid, { text: '[TEST] ' + respuesta });
+        
+        res.json({ 
+            status: 'OK', 
+            groq_respuesta: respuesta,
+            enviado_a: telefono,
+            mensaje: 'Mensaje de prueba enviado al dueno'
+        });
+    } catch(e) {
+        res.json({ error: e.message });
     }
 });
 
