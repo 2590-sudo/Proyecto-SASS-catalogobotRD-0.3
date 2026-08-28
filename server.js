@@ -40,6 +40,17 @@ const configSchema = new mongoose.Schema({
 });
 const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig', configSchema);
 
+// Schema para datos persistentes de clientes
+const customerSchema = new mongoose.Schema({
+    clientId: String,
+    telefono: String,
+    nombre: String,
+    direccion: String,
+    historialPedidos: { type: Array, default: [] },
+    enEsperaHumano: { type: Boolean, default: false }
+});
+const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema);
+
 // === MEMORIA DE CONVERSACION POR CLIENTE ===
 const conversationHistory = {};
 function getHistory(key) {
@@ -139,9 +150,9 @@ async function handleWithGroq(textoCliente, idNegocio, conversationKey) {
         if (!response.ok) {
             const errBody = await response.text();
             console.error('[GROQ HTTP ERROR]', response.status, errBody);
-            // Retry en 429 (rate limit) o 5xx
-            if ((response.status === 429 || response.status >= 500) && attempt < 2) {
-                console.log('[GROQ] Reintentando en 3 segundos...');
+            // Retry en 429 (rate limit) o 5xx - hasta 3 intentos
+            if ((response.status === 429 || response.status >= 500) && attempt < 3) {
+                console.log('[GROQ] Reintentando en 3 segundos... (intento ' + (attempt + 1) + '/3)');
                 await new Promise(r => setTimeout(r, 3000));
                 return callGroq(attempt + 1);
             }
@@ -181,6 +192,19 @@ async function connectDB() {
                 productos: c.productos || [],
                 activo: c.activo !== false
             };
+        }
+
+        // Cargar datos de clientes desde MongoDB
+        try {
+            const clientes = await Customer.find({ enEsperaHumano: true });
+            console.log('Clientes en espera de humano: ' + clientes.length);
+            // Resetear estado de espera al reiniciar (no queremos que se queden bloqueados)
+            if (clientes.length > 0) {
+                await Customer.updateMany({ enEsperaHumano: true }, { enEsperaHumano: false });
+                console.log('Estados de espera humana reseteados');
+            }
+        } catch(e) {
+            console.error('Error cargando clientes:', e.message);
         }
 
     } catch (e) {
@@ -251,6 +275,9 @@ async function startClientSession(clientId, phoneNumber, res) {
         }
     });
 
+    // Tracking de solicitudes de agente humano por cliente
+    const agentRequestCount = {};
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
         console.log('[MSG EVENT] Evento messages.upsert disparado, mensajes:', messages.length);
         const msg = messages[0];
@@ -274,6 +301,81 @@ async function startClientSession(clientId, phoneNumber, res) {
             console.log('[BOT SUSPENDIDO] Cliente ' + clientId + ' inactivo. Ignorando msj.');
             return;
         }
+
+        // === FIX 4: HANDOFF A HUMANO ===
+        const textoLower = textoCliente.toLowerCase();
+        if (textoLower.includes('agente') || textoLower.includes('humano') || textoLower.includes('persona') || textoLower.includes('operador')) {
+            if (!agentRequestCount[conversationKey]) agentRequestCount[conversationKey] = 0;
+            agentRequestCount[conversationKey]++;
+            console.log('[AGENTE] Cliente ' + sender + ' pidio agente. Contador: ' + agentRequestCount[conversationKey]);
+
+            if (agentRequestCount[conversationKey] >= 3) {
+                console.log('[AGENTE] Transfiriendo a humano. Cliente: ' + sender);
+                
+                // Marcar cliente en espera de humano en MongoDB
+                try {
+                    const telefonoLimpio = sender.split('@')[0];
+                    await Customer.findOneAndUpdate(
+                        { clientId, telefono: telefonoLimpio },
+                        { enEsperaHumano: true },
+                        { upsert: true }
+                    );
+                } catch(e) { console.error('[AGENTE] Error guardando estado:', e.message); }
+
+                // Avisar al cliente
+                await sock.sendMessage(sender, { text: 'Listo, te estoy transfiriendo con una persona. En un momento te atienden. 👋' });
+
+                // Notificar al dueno
+                try {
+                    const telefonoDueno = config.telefono;
+                    if (telefonoDueno) {
+                        const jidDueno = telefonoDueno.includes('@s.whatsapp.net') ? telefonoDueno : telefonoDueno + '@s.whatsapp.net';
+                        await sock.sendMessage(jidDueno, { 
+                            text: '🔔 *Atencion requerida*\n\nUn cliente pidio hablar con humano.\n\nNumero: ' + sender.split('@')[0] + '\nMensajes en el chat: revisa la conversacion.\n\nRespondele directamente para atenderlo.' 
+                        });
+                        console.log('[AGENTE] Dueno notificado');
+                    }
+                } catch(e) { console.error('[AGENTE] Error notificando dueno:', e.message); }
+
+                // Limpiar contador y dejar de responder a este cliente por 1 hora
+                agentRequestCount[conversationKey] = 0;
+                conversationHistory[conversationKey] = [];
+                setTimeout(() => { delete agentRequestCount[conversationKey]; }, 60 * 60 * 1000);
+                
+                // Buscar y resetear el flag de espera humana despues de 1 hora
+                setTimeout(async () => {
+                    try {
+                        const telefonoLimpio = sender.split('@')[0];
+                        await Customer.findOneAndUpdate(
+                            { clientId, telefono: telefonoLimpio },
+                            { enEsperaHumano: false }
+                        );
+                    } catch(e) {}
+                }, 60 * 60 * 1000);
+                return;
+            } else {
+                const faltan = 3 - agentRequestCount[conversationKey];
+                await sock.sendMessage(sender, { text: 'Si prefieres hablar con una persona, escribe "agente" ' + faltan + ' vez mas para transferirte.' });
+                return;
+            }
+        }
+
+        // Verificar si el cliente esta en espera de humano
+        try {
+            const telefonoLimpio = sender.split('@')[0];
+            const customer = await Customer.findOne({ clientId, telefono: telefonoLimpio });
+            if (customer && customer.enEsperaHumano) {
+                console.log('[AGENTE] Cliente ' + sender + ' en espera de humano. No responde el bot.');
+                // Re-notificar al dueno
+                const telefonoDueno = config.telefono;
+                if (telefonoDueno) {
+                    const jidDueno = telefonoDueno.includes('@s.whatsapp.net') ? telefonoDueno : telefonoDueno + '@s.whatsapp.net';
+                    await sock.sendMessage(jidDueno, { text: '📨 El cliente ' + telefonoLimpio + ' escribio: "' + textoCliente + '"' });
+                }
+                return;
+            }
+        } catch(e) { console.error('[AGENTE] Error verificando espera humano:', e.message); }
+
         console.log('[WS IN] Mensaje de ' + sender + ': ' + textoCliente);
 
         // === TODO VA A GROQ - SIN MENSAJES FIJOS ===
@@ -284,10 +386,68 @@ async function startClientSession(clientId, phoneNumber, res) {
             console.log('[HANDLER] Enviando respuesta a WhatsApp...');
             await sock.sendMessage(sender, { text: respuestaIA });
             console.log('[HANDLER] Respuesta enviada OK');
+
+            // === FIX 3: DETECTAR PEDIDO Y NOTIFICAR AL DUENO ===
+            const palabrasPedido = ['confirmo', 'confirmar', 'pedir', 'pedi', 'ordenar', 'ordene', 'quiero comprar', 'comprar', 'llevame', 'enviamelo', 'envialo', 'cuanto es', 'total', 'pagar', 'delivery', 'envio', 'direccion'];
+            const respuestaLower = respuestaIA.toLowerCase();
+            const esPedido = palabrasPedido.some(p => textoLower.includes(p));
+            const esConfirmacion = respuestaLower.includes('confirm') || respuestaLower.includes('pedido') || respuestaLower.includes('total') || respuestaLower.includes('envio') || respuestaLower.includes('delivery');
+
+            if (esPedido || esConfirmacion) {
+                console.log('[PEDIDO] Posible pedido detectado de ' + sender);
+                
+                // Extraer nombre del cliente de la conversacion
+                let nombreCliente = sender.split('@')[0];
+                const historial = getHistory(conversationKey);
+                // Buscar nombre en el historial
+                for (let i = historial.length - 1; i >= 0; i--) {
+                    const m = historial[i];
+                    if (m.role === 'user' && (m.content.toLowerCase().includes('me llamo') || m.content.toLowerCase().includes('mi nombre es') || m.content.toLowerCase().includes('soy '))) {
+                        const match = m.content.match(/(?:me llamo|mi nombre es|soy)\s+([a-z\s]+)/i);
+                        if (match) nombreCliente = match[1].trim().substring(0, 50);
+                        break;
+                    }
+                }
+
+                // Guardar/actualizar cliente en MongoDB
+                try {
+                    const telefonoLimpio = sender.split('@')[0];
+                    await Customer.findOneAndUpdate(
+                        { clientId, telefono: telefonoLimpio },
+                        { 
+                            clientId, 
+                            telefono: telefonoLimpio,
+                            nombre: nombreCliente !== telefonoLimpio ? nombreCliente : undefined
+                        },
+                        { upsert: true, new: true }
+                    );
+                } catch(e) { console.error('[PEDIDO] Error guardando cliente:', e.message); }
+
+                // Notificar al dueno
+                try {
+                    const telefonoDueno = config.telefono;
+                    if (telefonoDueno) {
+                        const jidDueno = telefonoDueno.includes('@s.whatsapp.net') ? telefonoDueno : telefonoDueno + '@s.whatsapp.net';
+                        const resumenPedido = '🛎️ *Nuevo pedido*\n\n' +
+                            'Cliente: ' + nombreCliente + '\n' +
+                            'Telefono: ' + sender.split('@')[0] + '\n' +
+                            'Negocio: ' + (config.nombre || clientId) + '\n\n' +
+                            'Ultimo mensaje del cliente:\n' + textoCliente + '\n\n' +
+                            'Respuesta del bot:\n' + respuestaIA;
+                        await sock.sendMessage(jidDueno, { text: resumenPedido });
+                        console.log('[PEDIDO] Dueno notificado del pedido');
+                    }
+                } catch(e) { console.error('[PEDIDO] Error notificando dueno:', e.message); }
+            }
         } catch (error) {
             console.error('[ERROR GROQ] Fallo en cliente ' + clientId + ':', error.message);
+            // Mensaje personalizado segun tipo de error
+            let errorMsg = 'Un momento, tengo un problema tecnico. Vuelvo enseguida.';
+            if (error.message.includes('429') || error.message.includes('timeout')) {
+                errorMsg = 'Dame un momentito por favor, estoy procesando varios pedidos. Enseguida te respondo. 🙏';
+            }
             try {
-                await sock.sendMessage(sender, { text: 'Un momento, tengo un problema tecnico. Vuelvo enseguida.' });
+                await sock.sendMessage(sender, { text: errorMsg });
             } catch(e2) {
                 console.error('[ERROR ENVIAR]', e2.message);
             }
