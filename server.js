@@ -40,8 +40,23 @@ const configSchema = new mongoose.Schema({
 });
 const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig', configSchema);
 
+// === MEMORIA DE CONVERSACION POR CLIENTE ===
+const conversationHistory = {};
+function getHistory(key) {
+    if (!conversationHistory[key]) conversationHistory[key] = [];
+    return conversationHistory[key];
+}
+function addToHistory(key, role, content) {
+    const hist = getHistory(key);
+    hist.push({ role, content });
+    // Mantener solo los ultimos 10 mensajes
+    if (hist.length > 10) hist.shift();
+    // Limpiar si pasaron mas de 30 min sin actividad
+    setTimeout(() => { if (conversationHistory[key] === hist) delete conversationHistory[key]; }, 30 * 60 * 1000);
+}
+
 // === CEREBRO GROQ - TODO PASA POR AQUI ===
-async function handleWithGroq(textoCliente, idNegocio) {
+async function handleWithGroq(textoCliente, idNegocio, conversationKey) {
     let config = clientConfigs[idNegocio];
     if (!config) {
         const dbConfig = await ClientConfig.findOne({ clientId: idNegocio });
@@ -83,45 +98,70 @@ async function handleWithGroq(textoCliente, idNegocio) {
             'Nunca uses mayusculas en todo el mensaje. Nunca mandes links.';
     }
 
+    // Construir mensajes con historial de conversacion
+    const history = conversationKey ? getHistory(conversationKey) : [];
+    const messages = [
+        { role: "system", content: systemPrompt },
+        ...history,
+        { role: "user", content: textoCliente }
+    ];
+
     console.log('Llamando a Groq con:', textoCliente);
     console.log('Modelo:', GROQ_MODEL);
-    console.log('Negocio:', nombreNegocio, '- Productos:', productos.length);
+    console.log('Negocio:', nombreNegocio, '- Productos:', productos.length, '- Historial:', history.length);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    
-    console.log('[GROQ] Enviando peticion a Groq...');
-    const response = await fetch(GROQ_URL, {
-        method: 'POST',
-        headers: {
-            'Authorization': 'Bearer ' + GROQ_API_KEY,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            model: GROQ_MODEL,
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: textoCliente }
-            ],
-            temperature: 0.7,
-            max_tokens: 300
-        }),
-        signal: controller.signal
-    }).catch(function(err) {
+    // Funcion con retry
+    async function callGroq(attempt) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        
+        console.log('[GROQ] Enviando peticion a Groq... (intento ' + attempt + ')');
+        const response = await fetch(GROQ_URL, {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + GROQ_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: GROQ_MODEL,
+                messages: messages,
+                temperature: 0.7,
+                max_tokens: 300
+            }),
+            signal: controller.signal
+        }).catch(function(err) {
+            clearTimeout(timeout);
+            if (err.name === 'AbortError') throw new Error('Groq timeout (15s)');
+            throw err;
+        });
         clearTimeout(timeout);
-        if (err.name === 'AbortError') throw new Error('Groq timeout (15s)');
-        throw err;
-    });
-    clearTimeout(timeout);
 
-    if (!response.ok) {
-        const errBody = await response.text();
-        console.error('[GROQ HTTP ERROR]', response.status, errBody);
-        throw new Error('Groq HTTP ' + response.status + ': ' + errBody);
+        if (!response.ok) {
+            const errBody = await response.text();
+            console.error('[GROQ HTTP ERROR]', response.status, errBody);
+            // Retry en 429 (rate limit) o 5xx
+            if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+                console.log('[GROQ] Reintentando en 3 segundos...');
+                await new Promise(r => setTimeout(r, 3000));
+                return callGroq(attempt + 1);
+            }
+            throw new Error('Groq HTTP ' + response.status + ': ' + errBody);
+        }
+
+        return response;
     }
 
+    const response = await callGroq(1);
     const data = await response.json();
-    return data.choices[0].message.content.trim();
+    const respuesta = data.choices[0].message.content.trim();
+    
+    // Guardar en historial
+    if (conversationKey) {
+        addToHistory(conversationKey, 'user', textoCliente);
+        addToHistory(conversationKey, 'assistant', respuesta);
+    }
+    
+    return respuesta;
 }
 
 async function connectDB() {
@@ -221,7 +261,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         const sender = msg.key.remoteJid;
         console.log('[MSG] Remitente:', sender);
         
-        const textoCliente = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || "").trim().toLowerCase();
+        const textoCliente = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || msg.message?.videoMessage?.caption || "").trim();
         console.log('[MSG] Texto extraido:', textoCliente);
 
         if (!textoCliente) { console.log('[MSG] Texto vacio, ignorando'); return; }
@@ -239,7 +279,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         // === TODO VA A GROQ - SIN MENSAJES FIJOS ===
         try {
             console.log('[HANDLER] Llamando a handleWithGroq...');
-            const respuestaIA = await handleWithGroq(textoCliente, clientId);
+            const respuestaIA = await handleWithGroq(textoCliente, clientId, conversationKey);
             console.log('[GROQ RESPUESTA]', respuestaIA);
             console.log('[HANDLER] Enviando respuesta a WhatsApp...');
             await sock.sendMessage(sender, { text: respuestaIA });
