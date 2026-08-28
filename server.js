@@ -73,6 +73,10 @@ async function handleWithGroq(textoCliente, idNegocio) {
     console.log('Modelo:', GROQ_MODEL);
     console.log('Negocio:', nombreNegocio, '- Productos:', productos.length);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    
+    console.log('[GROQ] Enviando peticion a Groq...');
     const response = await fetch(GROQ_URL, {
         method: 'POST',
         headers: {
@@ -87,8 +91,14 @@ async function handleWithGroq(textoCliente, idNegocio) {
             ],
             temperature: 0.7,
             max_tokens: 300
-        })
+        }),
+        signal: controller.signal
+    }).catch(function(err) {
+        clearTimeout(timeout);
+        if (err.name === 'AbortError') throw new Error('Groq timeout (15s)');
+        throw err;
     });
+    clearTimeout(timeout);
 
     if (!response.ok) {
         const errBody = await response.text();
@@ -154,21 +164,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         const { connection, lastDisconnect } = update;
         if (connection === 'open') {
             console.log('[CONEXION] Cliente ' + clientId + ' conectado exitosamente');
-            try {
-                const config = clientConfigs[clientId] || {};
-                const telefonoOwner = config.telefono;
-                if (telefonoOwner) {
-                    const jidOwner = telefonoOwner.includes('@s.whatsapp.net') 
-                        ? telefonoOwner 
-                        : telefonoOwner + '@s.whatsapp.net';
-                    await sock.sendMessage(jidOwner, { 
-                        text: 'Asistente activado y atendiendo clientes 24/7 desde su WhatsApp.' 
-                    });
-                    console.log('[MENSAJE PROPIETARIO] Notificacion enviada a ' + telefonoOwner);
-                }
-            } catch (e) {
-                console.error('[MENSAJE PROPIETARIO] Error:', e.message);
-            }
+            // No enviar auto-mensaje al propietario en cada reconexion - evita flag de Meta
         }
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -195,13 +191,19 @@ async function startClientSession(clientId, phoneNumber, res) {
     });
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
+        console.log('[MSG EVENT] Evento messages.upsert disparado, mensajes:', messages.length);
         const msg = messages[0];
-        if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
+        if (!msg.message) { console.log('[MSG] Sin contenido de mensaje'); return; }
+        if (msg.key.fromMe) { console.log('[MSG] Es mensaje propio, ignorando'); return; }
+        if (msg.key.remoteJid.includes('@g.us')) { console.log('[MSG] Es grupo, ignorando'); return; }
 
         const sender = msg.key.remoteJid;
+        console.log('[MSG] Remitente:', sender);
+        
         const textoCliente = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || "").trim().toLowerCase();
+        console.log('[MSG] Texto extraido:', textoCliente);
 
-        if (!textoCliente) return;
+        if (!textoCliente) { console.log('[MSG] Texto vacio, ignorando'); return; }
 
         const conversationKey = clientId + '_' + sender;
         activeConversations[conversationKey] = Date.now();
@@ -211,16 +213,23 @@ async function startClientSession(clientId, phoneNumber, res) {
             console.log('[BOT SUSPENDIDO] Cliente ' + clientId + ' inactivo. Ignorando msj.');
             return;
         }
-        console.log('[WS IN] Mensaje recibido de ' + sender + ': ' + textoCliente);
+        console.log('[WS IN] Mensaje de ' + sender + ': ' + textoCliente);
 
         // === TODO VA A GROQ - SIN MENSAJES FIJOS ===
         try {
+            console.log('[HANDLER] Llamando a handleWithGroq...');
             const respuestaIA = await handleWithGroq(textoCliente, clientId);
             console.log('[GROQ RESPUESTA]', respuestaIA);
+            console.log('[HANDLER] Enviando respuesta a WhatsApp...');
             await sock.sendMessage(sender, { text: respuestaIA });
+            console.log('[HANDLER] Respuesta enviada OK');
         } catch (error) {
             console.error('[ERROR GROQ] Fallo en cliente ' + clientId + ':', error.message);
-            await sock.sendMessage(sender, { text: 'Un momento, tengo un problema tecnico. Vuelvo enseguida.' });
+            try {
+                await sock.sendMessage(sender, { text: 'Un momento, tengo un problema tecnico. Vuelvo enseguida.' });
+            } catch(e2) {
+                console.error('[ERROR ENVIAR]', e2.message);
+            }
         }
     });
 }
@@ -390,6 +399,11 @@ async function reactivarSesiones() {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
+    console.log('=== INICIO ===');
+    console.log('Node.js version:', process.version);
+    console.log('fetch disponible:', typeof fetch !== 'undefined');
+    console.log('GROQ_API_KEY configurada:', GROQ_API_KEY ? 'SI (' + GROQ_API_KEY.substring(0,8) + '...)' : 'NO - FALTA CONFIGURAR');
+    console.log('MONGO_URI configurada:', MONGO_URI !== 'URL_DE_MONGO_AQUI' ? 'SI' : 'NO - FALTA CONFIGURAR');
     console.log('Motor SaaS escuchando en el puerto ' + PORT);
     if (MONGO_URI !== "URL_DE_MONGO_AQUI") {
         await connectDB();
