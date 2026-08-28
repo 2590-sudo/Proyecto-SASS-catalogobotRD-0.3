@@ -387,6 +387,28 @@ async function startClientSession(clientId, phoneNumber, res) {
             await sock.sendMessage(sender, { text: respuestaIA });
             console.log('[HANDLER] Respuesta enviada OK');
 
+            // === FIX: ENVIAR FOTOS DE PRODUCTOS ===
+            const productos = config.productos || [];
+            const aiResponseLower = respuestaIA.toLowerCase();
+            const clientMsgLower = textoLower;
+            let photosSent = 0;
+            
+            for (const p of productos) {
+                const nombreLower = p.nombre.toLowerCase();
+                if (p.imagen && (aiResponseLower.includes(nombreLower) || clientMsgLower.includes(nombreLower))) {
+                    if (photosSent >= 2) break; // Limit to max 2 images per response
+                    try {
+                        const base64Data = p.imagen.replace(/^data:image\/\w+;base64,/, "");
+                        const buffer = Buffer.from(base64Data, 'base64');
+                        await sock.sendMessage(sender, { image: buffer, caption: `📸 *${p.nombre}*` });
+                        photosSent++;
+                        console.log('[FOTO] Enviada: ' + p.nombre);
+                    } catch(e) {
+                        console.error('[ERROR FOTO]', e.message);
+                    }
+                }
+            }
+
             // === FIX 3: DETECTAR PEDIDO Y NOTIFICAR AL DUENO ===
             const palabrasPedido = ['confirmo', 'confirmar', 'pedir', 'pedi', 'ordenar', 'ordene', 'quiero comprar', 'comprar', 'llevame', 'enviamelo', 'envialo', 'cuanto es', 'total', 'pagar', 'delivery', 'envio', 'direccion'];
             const respuestaLower = respuestaIA.toLowerCase();
@@ -455,6 +477,36 @@ async function startClientSession(clientId, phoneNumber, res) {
     });
 }
 
+
+app.delete('/api/catalogo/:clientId/producto/:productId', async (req, res) => {
+    const { clientId, productId } = req.params;
+    try {
+        const ClientConfig = mongoose.models.ClientConfig || mongoose.model('ClientConfig');
+        const config = await ClientConfig.findOne({ clientId });
+        if (!config) return res.status(404).json({ error: 'Not found' });
+        
+        let productos = config.productos || [];
+        productos = productos.filter(p => p.id !== productId);
+        
+        const catalogoTexto = productos.map(p => `- ${p.nombre}: $${p.precio} (${p.descripcion})`).join('\n');
+
+        await ClientConfig.findOneAndUpdate(
+            { clientId },
+            { productos: productos, catalogo: catalogoTexto },
+            { upsert: true }
+        );
+
+        if (clientConfigs[clientId]) {
+            clientConfigs[clientId].productos = productos;
+            clientConfigs[clientId].catalogo = catalogoTexto;
+        }
+
+        res.json({ success: true });
+    } catch(e) {
+        console.error("Error deleting product:", e);
+        res.status(500).json({ success: false, error: 'Fallo al eliminar en DB' });
+    }
+});
 
 app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), async (req, res) => {
     const { clientId } = req.params;

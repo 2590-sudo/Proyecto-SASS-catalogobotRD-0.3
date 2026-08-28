@@ -179,7 +179,7 @@
                         </span>
                     </td>
                     <td>
-                        <button class="btn-update" onclick="openModal('${clientId}', \`${info.catalogo.replace(/`/g, '\`')}\`)">✏️ Editar Menú y Foto</button>
+                        <button class="btn-update" onclick="openModal('${clientId}')">✏️ Editar Menú y Foto</button>
                         <button class="btn-warning" onclick="toggleStatus('${clientId}')" style="background:${info.activo ? '#ff9800' : '#28a745'}; color:white; border:none; padding:5px; border-radius:3px; cursor:pointer;">
                             ${info.activo ? '⏸️ Suspender' : '▶️ Reactivar'}
                         </button>
@@ -212,19 +212,32 @@
             }
         }
 
-        async function loadProducts(clientId) {
-
+                async function loadProducts(clientId) {
             const res = await fetch(`/api/catalogo/${clientId}/productos`);
             const productos = await res.json();
             const list = document.getElementById('productList');
             list.innerHTML = '';
             productos.forEach(p => {
-                list.innerHTML += `<div style="padding: 5px; border-bottom: 1px solid #ccc;">
-                    <strong>${p.nombre}</strong> - $${p.precio} <br>
-                    <small>${p.descripcion}</small>
-                    ${p.imagen ? `<br><img src="${p.imagen}" width="50">` : ''}
+                list.innerHTML += `<div style="padding: 10px; margin-bottom: 5px; border-bottom: 1px solid #ccc; display: flex; justify-content: space-between; align-items: center; background: #fff;">
+                    <div>
+                        <strong>${p.nombre}</strong> - $${p.precio} <br>
+                        <small style="color:#666;">${p.descripcion}</small>
+                        ${p.imagen ? `<br><img src="${p.imagen}" style="width: 60px; height: 60px; object-fit: cover; margin-top:5px; border-radius: 4px; border: 1px solid #eee;">` : ''}
+                    </div>
+                    <button class="btn-danger" style="width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 18px;" onclick="deleteProduct('${clientId}', '${p.id}')">🗑️</button>
                 </div>`;
             });
+        }
+
+        async function deleteProduct(clientId, productId) {
+            if(!confirm('¿Estás seguro de eliminar este producto del menú?')) return;
+            const res = await fetch(`/api/catalogo/${clientId}/producto/${productId}`, { method: 'DELETE' });
+            const data = await res.json();
+            if(data.success) {
+                await loadProducts(clientId);
+            } else {
+                alert('Error al eliminar');
+            }
         }
 
         async function openModal(clientId) {
@@ -252,7 +265,7 @@
                 alert('Producto guardado!');
                 document.getElementById('productForm').reset();
                 await loadProducts(clientId);
-                fetchClients();
+                loadStatus();
             } else {
                 alert('Error al guardar');
             }
