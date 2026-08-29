@@ -19,7 +19,7 @@ app.use(express.static('public'));
 
 const MONGO_URI = process.env.MONGO_URI || "URL_DE_MONGO_AQUI";
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-const GROQ_MODEL = "openai/gpt-oss-20b";
+const GROQ_MODEL = "llama3-8b-8192";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const activeSessions = {};
@@ -265,12 +265,12 @@ async function startClientSession(clientId, phoneNumber, res) {
                     });
                 }, delay);
             } else {
-                console.log('[SESION] Cliente ' + clientId + ' fue desconectado (loggedOut). NO se borran creds - se reintentara mas tarde.');
+                console.log('[SESION CERRADA] Cliente ' + clientId + ' desvinculado por WhatsApp (401). BORRANDO credenciales.');
                 delete activeSessions[clientId];
-                // Reintentar conexion despues de 2 minutos
-                setTimeout(function() {
-                    startClientSession(clientId, null, null);
-                }, 120000);
+                try {
+                    await removeCreds();
+                    // Opcional: Marcar como inactivo en la BD
+                } catch(e) { console.error('Error limpiando credenciales:', e.message); }
             }
         }
     });
