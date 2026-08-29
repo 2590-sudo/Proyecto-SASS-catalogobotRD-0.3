@@ -48,22 +48,88 @@ const customerSchema = new mongoose.Schema({
     nombre: String,
     direccion: String,
     historialPedidos: { type: Array, default: [] },
-    enEsperaHumano: { type: Boolean, default: false }
+    enEsperaHumano: { type: Boolean, default: false },
+    historialChat: { type: Array, default: [] },
+    ultimaInteraccion: { type: Date, default: Date.now }
 });
 const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema);
 
-// === MEMORIA DE CONVERSACION POR CLIENTE ===
+// === MEMORIA DE CONVERSACION POR CLIENTE (PERSISTENTE 24H) ===
 const conversationHistory = {};
-function getHistory(key) {
-    if (!conversationHistory[key]) conversationHistory[key] = [];
+
+async function getHistory(key) {
+    if (!conversationHistory[key]) {
+        // Intentar cargar de MongoDB
+        const sepIndex = key.indexOf('_');
+        const clientId = key.substring(0, sepIndex);
+        const sender = key.substring(sepIndex + 1);
+        
+        if (clientId && sender) {
+            const telefonoLimpio = sender.split('@')[0];
+            try {
+                const Customer = mongoose.models.Customer;
+                const customer = await Customer.findOne({ clientId, telefono: telefonoLimpio });
+                
+                // Si existe y la ultima interaccion fue hace menos de 24 horas
+                if (customer && customer.historialChat && customer.historialChat.length > 0) {
+                    const ahora = new Date();
+                    const ultimaInteraccion = customer.ultimaInteraccion || ahora;
+                    const horasPasadas = (ahora - ultimaInteraccion) / (1000 * 60 * 60);
+                    
+                    if (horasPasadas < 24) {
+                        conversationHistory[key] = customer.historialChat;
+                        console.log('[MEMORIA] Historial recuperado de Mongo para ' + telefonoLimpio);
+                    } else {
+                        // Expirado, empezar de cero
+                        conversationHistory[key] = [];
+                        console.log('[MEMORIA] Historial expirado (mas de 24h) para ' + telefonoLimpio);
+                    }
+                } else {
+                    conversationHistory[key] = [];
+                }
+            } catch(e) {
+                console.error('[BD MEMORIA] Error cargando historial:', e.message);
+                conversationHistory[key] = [];
+            }
+        } else {
+            conversationHistory[key] = [];
+        }
+    }
     return conversationHistory[key];
 }
-function addToHistory(key, role, content) {
-    const hist = getHistory(key);
+
+async function addToHistory(key, role, content) {
+    const hist = await getHistory(key);
     hist.push({ role, content });
-    // Mantener solo los ultimos 10 mensajes
-    if (hist.length > 10) hist.shift();
-    // Limpiar si pasaron mas de 30 min sin actividad
+    
+    // Mantener solo los ultimos 16 mensajes (8 interacciones completas) para no saturar memoria/tokens
+    if (hist.length > 16) hist.shift();
+    
+    // Sincronizar con MongoDB (fire & forget)
+    const sepIndex = key.indexOf('_');
+    const clientId = key.substring(0, sepIndex);
+    const sender = key.substring(sepIndex + 1);
+    
+    if (clientId && sender) {
+        const telefonoLimpio = sender.split('@')[0];
+        try {
+            const Customer = mongoose.models.Customer;
+            await Customer.findOneAndUpdate(
+                { clientId, telefono: telefonoLimpio },
+                { 
+                    $set: { 
+                        historialChat: hist,
+                        ultimaInteraccion: new Date()
+                    } 
+                },
+                { upsert: true }
+            );
+        } catch(e) {
+            console.error('[BD MEMORIA] Error guardando historial:', e.message);
+        }
+    }
+    
+    // Limpiar RAM despues de 30 min, persistira en Mongo sin problemas
     setTimeout(() => { if (conversationHistory[key] === hist) delete conversationHistory[key]; }, 30 * 60 * 1000);
 }
 
@@ -111,7 +177,7 @@ async function handleWithGroq(textoCliente, idNegocio, conversationKey) {
     }
 
     // Construir mensajes con historial de conversacion
-    const history = conversationKey ? getHistory(conversationKey) : [];
+    const history = conversationKey ? await getHistory(conversationKey) : [];
     const messages = [
         { role: "system", content: systemPrompt },
         ...history,
@@ -427,7 +493,7 @@ async function startClientSession(clientId, phoneNumber, res) {
                 
                 // Extraer nombre del cliente de la conversacion
                 let nombreCliente = sender.split('@')[0];
-                const historial = getHistory(conversationKey);
+                const historial = await getHistory(conversationKey);
                 // Buscar nombre en el historial
                 for (let i = historial.length - 1; i >= 0; i--) {
                     const m = historial[i];
