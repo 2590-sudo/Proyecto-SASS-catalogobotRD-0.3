@@ -108,7 +108,7 @@
                         <input type="number" id="prodPrecio" placeholder="Precio (RD$)" required>
                         <textarea id="prodDesc" placeholder="Descripción del producto..."></textarea>
                         <label>Foto del Producto:</label>
-                        <input type="file" id="prodFoto" name="foto_producto" accept="image/*">
+                        <input type="file" id="prodFoto" name="foto_producto" accept="image/*" multiple title="Puedes seleccionar varias fotos">
                         <button type="button" class="btn-update" onclick="saveProduct()">➕ Guardar Producto</button>
                     </form>
                 </div>
@@ -222,7 +222,7 @@
                     <div>
                         <strong>${p.nombre}</strong> - $${p.precio} <br>
                         <small style="color:#666;">${p.descripcion}</small>
-                        ${p.imagen ? `<br><img src="${p.imagen}" style="width: 60px; height: 60px; object-fit: cover; margin-top:5px; border-radius: 4px; border: 1px solid #eee;">` : ''}
+                        ${ (p.imagenes && p.imagenes.length > 0) ? '<br>' + p.imagenes.map(img => `<img src="${img}" style="width: 60px; height: 60px; object-fit: cover; margin-top:5px; margin-right:5px; border-radius: 4px; border: 1px solid #eee;">`).join('') : (p.imagen ? `<br><img src="${p.imagen}" style="width: 60px; height: 60px; object-fit: cover; margin-top:5px; border-radius: 4px; border: 1px solid #eee;">` : '') }
                     </div>
                     <button class="btn-danger" style="width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 18px;" onclick="deleteProduct('${clientId}', '${p.id}')">🗑️</button>
                 </div>`;
@@ -253,8 +253,10 @@
             formData.append('nombre', document.getElementById('prodNombre').value);
             formData.append('precio', document.getElementById('prodPrecio').value);
             formData.append('descripcion', document.getElementById('prodDesc').value);
-            const foto = document.getElementById('prodFoto').files[0];
-            if(foto) formData.append('foto_producto', foto);
+            const fotos = document.getElementById('prodFoto').files;
+            for(let i=0; i<fotos.length; i++){
+                formData.append('foto_producto', fotos[i]);
+            }
 
             const res = await fetch(`/api/catalogo/${clientId}/producto`, {
                 method: 'POST',

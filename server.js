@@ -35,6 +35,7 @@ const configSchema = new mongoose.Schema({
     telefono: String,
     catalogo: String,
     imagenMenu: String,
+    imagenes: { type: Array, default: [] },
     productos: { type: Array, default: [] },
     activo: { type: Boolean, default: true }
 });
@@ -95,7 +96,7 @@ async function handleWithGroq(textoCliente, idNegocio, conversationKey) {
             'Catalogo: ' + (catalogo || JSON.stringify(productos)) + '. ' +
             'Usa SOLO la info de esos productos para responder. ' +
             'Si preguntan por algo que no esta, di que no lo tenemos por ahora. ' +
-            'Maximo 1 emoji. Nunca digas que eres IA o robot. ' +
+            'Maximo 1 emoji. Nunca digas que eres IA o robot. Si te piden fotos o catalogo, diles que enseguida se las envias (el sistema lo hara automatico, NO digas que no tienes). ' +
             'Nunca uses mayusculas en todo el mensaje. Nunca mandes links.';
     } else {
         systemPrompt = 'Eres el asistente de atencion al cliente de: ' + nombreNegocio + '. ' +
@@ -105,7 +106,7 @@ async function handleWithGroq(textoCliente, idNegocio, conversationKey) {
             'Si preguntan por productos, di que pronto tendremos el catalogo disponible. ' +
             'Si preguntan horario o ubicacion, responde que pronto tendremos esa info. ' +
             'Mantener la conversacion amable y breve. ' +
-            'Maximo 1 emoji. Nunca digas que eres IA o robot. ' +
+            'Maximo 1 emoji. Nunca digas que eres IA o robot. Si te piden fotos o catalogo, diles que enseguida se las envias (el sistema lo hara automatico, NO digas que no tienes). ' +
             'Nunca uses mayusculas en todo el mensaje. Nunca mandes links.';
     }
 
@@ -398,16 +399,19 @@ async function startClientSession(clientId, phoneNumber, res) {
             
             for (const p of productos) {
                 const nombreLower = p.nombre.toLowerCase();
-                if (clientePideFoto && p.imagen && (aiResponseLower.includes(nombreLower) || clientMsgLower.includes(nombreLower))) {
-                    if (photosSent >= 2) break; // Limit to max 2 images per response
-                    try {
-                        const base64Data = p.imagen.replace(/^data:image\/\w+;base64,/, "");
-                        const buffer = Buffer.from(base64Data, 'base64');
-                        await sock.sendMessage(sender, { image: buffer, caption: `📸 *${p.nombre}*` });
-                        photosSent++;
-                        console.log('[FOTO] Enviada: ' + p.nombre);
-                    } catch(e) {
-                        console.error('[ERROR FOTO]', e.message);
+                const arrImagenes = p.imagenes && p.imagenes.length > 0 ? p.imagenes : (p.imagen ? [p.imagen] : []);
+                if (clientePideFoto && arrImagenes.length > 0 && (aiResponseLower.includes(nombreLower) || clientMsgLower.includes(nombreLower))) {
+                    for (const imgStr of arrImagenes) {
+                        if (photosSent >= 4) break; // Límite 4 fotos por respuesta para no saturar
+                        try {
+                            const base64Data = imgStr.replace(/^data:image\/\w+;base64,/, "");
+                            const buffer = Buffer.from(base64Data, 'base64');
+                            await sock.sendMessage(sender, { image: buffer, caption: `📸 *${p.nombre}*` });
+                            photosSent++;
+                            console.log('[FOTO] Enviada: ' + p.nombre);
+                        } catch(e) {
+                            console.error('[ERROR FOTO]', e.message);
+                        }
                     }
                 }
             }
@@ -511,13 +515,13 @@ app.delete('/api/catalogo/:clientId/producto/:productId', async (req, res) => {
     }
 });
 
-app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), async (req, res) => {
+app.post('/api/catalogo/:clientId/producto', upload.array('foto_producto', 10), async (req, res) => {
     const { clientId } = req.params;
     const { nombre, precio, descripcion } = req.body;
     
-    let imagenBase64 = null;
-    if (req.file) {
-        imagenBase64 = 'data:' + req.file.mimetype + ';base64,' + req.file.buffer.toString('base64');
+    let imagenesBase64 = [];
+    if (req.files && req.files.length > 0) {
+        imagenesBase64 = req.files.map(file => 'data:' + file.mimetype + ';base64,' + file.buffer.toString('base64'));
     }
 
     const nuevoProducto = {
@@ -525,7 +529,7 @@ app.post('/api/catalogo/:clientId/producto', upload.single('foto_producto'), asy
         nombre: nombre,
         precio: parseFloat(precio),
         descripcion: descripcion,
-        imagen: imagenBase64
+        imagenes: imagenesBase64
     };
 
     try {
