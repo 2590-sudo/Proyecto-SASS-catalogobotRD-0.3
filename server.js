@@ -19,7 +19,7 @@ app.use(express.static('public'));
 
 const MONGO_URI = process.env.MONGO_URI || "URL_DE_MONGO_AQUI";
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-const GROQ_MODEL = "openai/gpt-oss-20b";
+const GROQ_MODEL = "llama3-8b-8192";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const activeSessions = {};
