@@ -26,12 +26,20 @@ async function useMongoDBAuthState(clientId) {
     };
 
     const writeData = async (file, data) => {
-        const str = JSON.stringify(data, BufferJSON.replacer);
-        await Auth.updateOne({ clientId, file }, { data: str }, { upsert: true });
+        try {
+            const str = JSON.stringify(data, BufferJSON.replacer);
+            await Auth.updateOne({ clientId, file }, { data: str }, { upsert: true });
+        } catch (e) {
+            console.error('[MONGO AUTH] Error guardando ' + file + ':', e.message);
+        }
     };
 
     const removeData = async (file) => {
-        await Auth.deleteOne({ clientId, file });
+        try {
+            await Auth.deleteOne({ clientId, file });
+        } catch (e) {
+            console.error('[MONGO AUTH] Error borrando ' + file + ':', e.message);
+        }
     };
 
     const creds = await readData('creds') || initAuthCreds();
