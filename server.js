@@ -303,7 +303,29 @@ async function startClientSession(clientId, phoneNumber, res) {
     // Tracking de solicitudes de agente humano por cliente
     const agentRequestCount = {};
 
+
+    // --- ESCUDO ANTI-BAN: Rechazo de Llamadas ---
+    sock.ev.on('call', async (calls) => {
+        for (const call of calls) {
+            if (call.status === 'offer') {
+                console.log('[LLAMADA RECHAZADA] De: ' + call.from);
+                try {
+                    await sock.rejectCall(call.id, call.from);
+                    await sock.sendMessage(call.from, { text: '🙏 *Aviso automático:*\nPor políticas del negocio, esta línea es solo para atención por chat. Por favor, escríbenos tu consulta por aquí.' });
+                } catch(e) { console.error('Error rechazando llamada:', e); }
+            }
+        }
+    });
+
+    // --- ESCUDO ANTI-BAN: Rate Limiting (Cola de Mensajes) ---
+    if (!global.clientQueues) global.clientQueues = {};
+    
     sock.ev.on('messages.upsert', async ({ messages }) => {
+        const queueClientId = clientId;
+        if (!global.clientQueues[queueClientId]) global.clientQueues[queueClientId] = Promise.resolve();
+        
+        global.clientQueues[queueClientId] = global.clientQueues[queueClientId].then(async () => {
+            try {
         console.log('[MSG EVENT] Evento messages.upsert disparado, mensajes:', messages.length);
         const msg = messages[0];
         if (!msg.message) { console.log('[MSG] Sin contenido de mensaje'); return; }
@@ -357,7 +379,12 @@ async function startClientSession(clientId, phoneNumber, res) {
                 } catch(e) { console.error('[AGENTE] Error guardando estado:', e.message); }
 
                 // Avisar al cliente
-                await sock.sendMessage(sender, { text: 'Listo, te estoy transfiriendo con una persona. En un momento te atienden. 👋' });
+                const spintaxAgente = [
+                    'Listo, te estoy transfiriendo con una persona. En un momento te atienden. 👋',
+                    '¡Entendido! Un asesor humano te responderá enseguida. 🙋‍♂️',
+                    'Perfecto, he notificado a nuestro equipo. Alguien te atenderá en breve. ⏳'
+                ];
+                await sock.sendMessage(sender, { text: spintaxAgente[Math.floor(Math.random() * spintaxAgente.length)] });
 
                 // Notificar al dueno
                 try {
@@ -389,7 +416,12 @@ async function startClientSession(clientId, phoneNumber, res) {
                 return;
             } else {
                 const faltan = 3 - agentRequestCount[conversationKey];
-                await sock.sendMessage(sender, { text: 'Si prefieres hablar con una persona, escribe "agente" ' + faltan + ' vez mas para transferirte.' });
+                const spintaxFaltan = [
+                    'Si prefieres hablar con una persona, escribe "agente" ' + faltan + ' vez mas para transferirte.',
+                    'Para pasar con un humano, por favor responde "agente" ' + faltan + ' veces mas.',
+                    'Si necesitas soporte humano, envia la palabra "agente" ' + faltan + ' vez mas.'
+                ];
+                await sock.sendMessage(sender, { text: spintaxFaltan[Math.floor(Math.random() * spintaxFaltan.length)] });
                 return;
             }
         }
@@ -530,6 +562,10 @@ async function startClientSession(clientId, phoneNumber, res) {
                 console.error('[ERROR ENVIAR]', e2.message);
             }
         }
+            } catch (queueErr) {
+                console.error('[ERROR COLA]', queueErr.message);
+            }
+        }); // fin de la cola
     });
 }
 
