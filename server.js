@@ -602,13 +602,21 @@ app.post('/api/connect', async (req, res) => {
     const { clientId, phoneNumber, tipoNegocio, nombreLocal, catalogo } = req.body;
     if (!clientId || !phoneNumber) return res.status(400).json({ error: 'Faltan datos' });
     
-    await ClientConfig.findOneAndUpdate(
+    const updatedConfig = await ClientConfig.findOneAndUpdate(
         { clientId },
         { tipo: tipoNegocio, nombre: nombreLocal, telefono: phoneNumber, catalogo: catalogo },
         { upsert: true, new: true }
     );
     
-    clientConfigs[clientId] = { tipo: tipoNegocio, nombre: nombreLocal, telefono: phoneNumber, catalogo: catalogo, imagenMenu: null };
+    clientConfigs[clientId] = { 
+        tipo: tipoNegocio, 
+        nombre: nombreLocal, 
+        telefono: phoneNumber, 
+        catalogo: catalogo, 
+        imagenMenu: updatedConfig.imagenMenu,
+        productos: updatedConfig.productos || [],
+        activo: updatedConfig.activo !== false 
+    };
     
     if (activeSessions[clientId] && activeSessions[clientId].authState.creds.me?.id) {
         return res.status(400).json({ error: 'El cliente ya esta conectado' });
