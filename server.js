@@ -26,7 +26,21 @@ const activeSessions = {};
 const clientConfigs = {}; 
 const activeConversations = {}; 
 const reconnectAttempts = {}; 
+
 const CONVERSATION_TIMEOUT = 60 * 60 * 1000;
+
+// Función para simular tecleo humano
+async function sendHumanMessage(sock, jid, content) {
+    await sock.sendPresenceUpdate('composing', jid);
+    
+    // Retraso aleatorio entre 1.5 y 3 segundos
+    const delay = Math.floor(Math.random() * (3000 - 1500 + 1)) + 1500;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    
+    await sock.sendPresenceUpdate('paused', jid);
+    return sock.sendMessage(jid, content);
+}
+
 
 const configSchema = new mongoose.Schema({
     clientId: { type: String, unique: true },
@@ -227,7 +241,7 @@ async function startClientSession(clientId, phoneNumber, res) {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        browser: ['Mac OS', 'Chrome', '121.0.0.0'],
         syncFullHistory: false,
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
@@ -306,6 +320,15 @@ async function startClientSession(clientId, phoneNumber, res) {
 
         const conversationKey = clientId + '_' + sender;
         activeConversations[conversationKey] = Date.now();
+
+        
+        // --- ESCUDO ANTI-BAN ---
+        // 1. Marcar como leído (Doble check azul)
+        try {
+            await sock.readMessages([msg.key]);
+        } catch (e) {
+            console.error('Error al marcar como leido:', e);
+        }
 
         const config = clientConfigs[clientId] || {};
         if (config.activo === false) {
@@ -395,7 +418,7 @@ async function startClientSession(clientId, phoneNumber, res) {
             const respuestaIA = await handleWithGroq(textoCliente, clientId, conversationKey);
             console.log('[GROQ RESPUESTA]', respuestaIA);
             console.log('[HANDLER] Enviando respuesta a WhatsApp...');
-            await sock.sendMessage(sender, { text: respuestaIA });
+            await sendHumanMessage(sock, sender, { text: respuestaIA });
             console.log('[HANDLER] Respuesta enviada OK');
 
             // === FIX: ENVIAR FOTOS DE PRODUCTOS (SOLO SI LO PIDEN) ===
@@ -708,6 +731,15 @@ app.get('/test-msg', async (req, res) => {
         const respuesta = await handleWithGroq('hola, que flores tienes?', clientId);
         
         // Buscar el telefono del dueno
+        
+        // --- ESCUDO ANTI-BAN ---
+        // 1. Marcar como leído (Doble check azul)
+        try {
+            await sock.readMessages([msg.key]);
+        } catch (e) {
+            console.error('Error al marcar como leido:', e);
+        }
+
         const config = clientConfigs[clientId] || {};
         const telefono = config.telefono;
         if (!telefono) return res.json({ error: 'No hay telefono configurado', groq_ok: respuesta });
