@@ -404,8 +404,24 @@ async function startClientSession(clientId, phoneNumber, res) {
             const clientMsgLower = textoLower;
             let photosSent = 0;
             
-            const palabrasFoto = ['foto', 'imagen', 'ver', 'muestrame', 'muéstrame', 'ensename', 'enséñame', 'catálogo', 'catalogo'];
+            const palabrasFoto = ['foto', 'imagen', 'ver', 'muestrame', 'muéstrame', 'ensename', 'enséñame', 'catálogo', 'catalogo', 'menu', 'menú'];
             const clientePideFoto = palabrasFoto.some(w => clientMsgLower.includes(w));
+            
+            // === ENVIAR FOTO DEL MENU PRINCIPAL ===
+            if (config.imagenMenu && clientePideFoto) {
+                const palabrasMenu = ['menu', 'menú', 'catalogo', 'catálogo', 'precios'];
+                if (palabrasMenu.some(w => clientMsgLower.includes(w) || aiResponseLower.includes(w))) {
+                    try {
+                        const base64Data = config.imagenMenu.replace(/^data:image\/\w+;base64,/, "");
+                        const buffer = Buffer.from(base64Data, 'base64');
+                        await sock.sendMessage(sender, { image: buffer, caption: '📖 *Nuestro Menú*' });
+                        console.log('[FOTO] Menú enviado a ' + sender);
+                        photosSent++;
+                    } catch(e) {
+                        console.error('[ERROR MENU FOTO]', e.message);
+                    }
+                }
+            }
             
             for (const p of productos) {
                 const nombreLower = p.nombre.toLowerCase();
