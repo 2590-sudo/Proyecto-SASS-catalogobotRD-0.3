@@ -8,6 +8,37 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const { useMongoDBAuthState } = require('./mongoAuth');
 
+
+// --- PUENTE TELEGRAM ---
+const TelegramBot = require('node-telegram-bot-api');
+const telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN || '8907715341:AAFJvGiy28R1IV5279cYSs2yAJjA4PP3ZHc', { polling: true });
+const MI_TELEGRAM_ID = '8847098131';
+if (!global.telegramSessionMap) global.telegramSessionMap = {};
+
+telegramBot.on('message', async (msg) => {
+    if (msg.chat.id.toString() !== MI_TELEGRAM_ID) return;
+    if (!msg.reply_to_message) return;
+
+    const match = msg.reply_to_message.text.match(/\[ID: (.+?)\]/);
+    if (match && match[1]) {
+        const sessionKey = match[1];
+        const route = global.telegramSessionMap[sessionKey];
+        
+        if (route && activeSessions[route.clientId]) {
+            const sock = activeSessions[route.clientId];
+            try {
+                await sock.sendMessage(route.whatsappJid, { text: msg.text });
+                telegramBot.sendMessage(MI_TELEGRAM_ID, `✅ Enviado a ${route.whatsappJid.split('@')[0]}`);
+            } catch (e) {
+                telegramBot.sendMessage(MI_TELEGRAM_ID, `❌ Error: ${e.message}`);
+            }
+        } else {
+            telegramBot.sendMessage(MI_TELEGRAM_ID, `⚠️ Error: Sesión inactiva.`);
+        }
+    }
+});
+// -----------------------
+
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
