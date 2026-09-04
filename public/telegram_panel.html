@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Administración - Grupo Telegram</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { color: #0088cc; text-align: center; margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; margin-bottom: 8px; color: #333; }
+        input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 14px; }
+        textarea { height: 120px; resize: vertical; }
+        .switch-container { display: flex; align-items: center; justify-content: space-between; padding: 15px; background: #f8f9fa; border-radius: 8px; margin-bottom: 15px; }
+        .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #0088cc; }
+        input:checked + .slider:before { transform: translateX(26px); }
+        button { width: 100%; padding: 12px; background-color: #0088cc; color: white; border: none; border-radius: 5px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
+        button:hover { background-color: #006699; }
+        .status { margin-top: 15px; text-align: center; font-weight: bold; color: green; display: none; }
+        .help-text { font-size: 12px; color: #666; margin-top: 5px; display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚙️ Panel del Bot Moderador</h1>
+        
+        <div class="form-group">
+            <label for="welcomeText">Mensaje de Bienvenida</label>
+            <textarea id="welcomeText" placeholder="¡Hola {name}, bienvenido al grupo!"></textarea>
+            <span class="help-text">Usa <b>{name}</b> para que el bot diga el nombre de la persona automáticamente.</span>
+        </div>
+
+        <div class="form-group">
+            <label for="welcomePhotoUrl">URL de la Foto de Bienvenida (Opcional)</label>
+            <input type="text" id="welcomePhotoUrl" placeholder="https://ejemplo.com/mifoto.jpg">
+            <span class="help-text">Pega un enlace directo a una imagen (JPG/PNG). Si lo dejas vacío, solo enviará texto.</span>
+        </div>
+
+        <div class="switch-container">
+            <div>
+                <label style="margin:0;">Prohibir Enlaces (Anti-Spam)</label>
+                <span class="help-text">Borra automáticamente cualquier enlace enviado por usuarios normales.</span>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="deleteLinks">
+                <span class="slider"></span>
+            </label>
+        </div>
+
+        <div class="switch-container">
+            <div>
+                <label style="margin:0;">Aprobar Solicitudes de Unión Automáticamente</label>
+                <span class="help-text">Si tu grupo requiere aprobación, el bot los dejará entrar al instante.</span>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="autoApprove">
+                <span class="slider"></span>
+            </label>
+        </div>
+
+        <button onclick="saveConfig()">💾 Guardar Configuración</button>
+        <div id="status" class="status">¡Configuración guardada con éxito!</div>
+    </div>
+
+    <script>
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/tg-config');
+                const data = await res.json();
+                document.getElementById('welcomeText').value = data.welcomeText || '';
+                document.getElementById('welcomePhotoUrl').value = data.welcomePhotoUrl || '';
+                document.getElementById('deleteLinks').checked = data.deleteLinks;
+                document.getElementById('autoApprove').checked = data.autoApprove;
+            } catch (e) {
+                console.error("Error cargando configuración", e);
+            }
+        }
+
+        async function saveConfig() {
+            const btn = document.querySelector('button');
+            btn.innerText = 'Guardando...';
+            
+            const payload = {
+                welcomeText: document.getElementById('welcomeText').value,
+                welcomePhotoUrl: document.getElementById('welcomePhotoUrl').value,
+                deleteLinks: document.getElementById('deleteLinks').checked,
+                autoApprove: document.getElementById('autoApprove').checked
+            };
+
+            try {
+                await fetch('/api/tg-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const status = document.getElementById('status');
+                status.style.display = 'block';
+                setTimeout(() => status.style.display = 'none', 3000);
+            } catch (e) {
+                alert("Error al guardar");
+            }
+            btn.innerText = '💾 Guardar Configuración';
+        }
+
+        // Cargar al iniciar
+        loadConfig();
+    </script>
+</body>
+</html>
