@@ -39,6 +39,12 @@ telegramBot.on('message', async (msg) => {
 });
 // -----------------------
 
+
+// --- BOT DE ADMINISTRACION TELEGRAM ---
+const tgAdmin = require('./telegram_bot_admin');
+setTimeout(() => tgAdmin.initAdminBot(), 5000); // Iniciar despues de 5 segundos
+// --------------------------------------
+
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
