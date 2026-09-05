@@ -5,7 +5,10 @@ const configSchema = new mongoose.Schema({
     welcomeText: { type: String, default: '¡Bienvenido/a {name} al grupo!' },
     welcomePhotoUrl: { type: String, default: '' },
     deleteLinks: { type: Boolean, default: true },
-    autoApprove: { type: Boolean, default: false }
+    autoApprove: { type: Boolean, default: false },
+    recurringMessage: { type: String, default: '' },
+    recurringInterval: { type: Number, default: 0 },
+    managedGroupId: { type: String, default: '' }
 });
 
 const TGConfig = mongoose.models.TGConfig || mongoose.model('TGConfig', configSchema);
@@ -15,18 +18,31 @@ let activeConfig = {
     welcomeText: '¡Bienvenido/a {name} al grupo!',
     welcomePhotoUrl: '',
     deleteLinks: true,
-    autoApprove: false
+    autoApprove: false,
+    recurringMessage: '',
+    recurringInterval: 0,
+    managedGroupId: ''
 };
+
+let broadcastTimer = null;
+
+function restartBroadcast() {
+    if (broadcastTimer) clearInterval(broadcastTimer);
+    if (activeConfig.recurringInterval > 0 && activeConfig.recurringMessage && activeConfig.managedGroupId) {
+        console.log(`[TG ADMIN] Iniciando mensaje recurrente cada ${activeConfig.recurringInterval} min`);
+        broadcastTimer = setInterval(() => {
+            if (bot) {
+                bot.sendMessage(activeConfig.managedGroupId, activeConfig.recurringMessage, { parse_mode: 'HTML' }).catch(console.error);
+            }
+        }, activeConfig.recurringInterval * 60 * 1000);
+    }
+}
 
 async function initAdminBot() {
     const token = process.env.TELEGRAM_BOT_TOKEN_2 || process.env.TELEGRAM_ADMIN_TOKEN;
-    if (!token) {
-        console.log('[TG ADMIN] No se encontro TELEGRAM_BOT_TOKEN_2 en las variables de entorno.');
-        return;
-    }
+    if (!token) return;
     
     bot = new TelegramBot(token, { polling: true });
-    console.log('[TG ADMIN] Bot de administracion iniciado.');
     
     try {
         let conf = await TGConfig.findOne({});
@@ -35,11 +51,22 @@ async function initAdminBot() {
             conf = new TGConfig(activeConfig);
             await conf.save();
         }
-    } catch(e) { console.error('Error cargando config TG:', e.message); }
+        restartBroadcast();
+    } catch(e) {}
 
-    // Eliminar enlaces
     bot.on('message', async (msg) => {
         const chatId = msg.chat.id;
+        
+        // Auto-capturar el ID del grupo
+        if ((msg.chat.type === 'group' || msg.chat.type === 'supergroup') && activeConfig.managedGroupId !== chatId.toString()) {
+            activeConfig.managedGroupId = chatId.toString();
+            try {
+                await TGConfig.updateOne({}, { managedGroupId: activeConfig.managedGroupId });
+                restartBroadcast();
+            } catch(e) {}
+        }
+
+        // Anti-links
         if (activeConfig.deleteLinks && msg.text) {
             const regexLink = /(http:\/\/|https:\/\/|t\.me|www\.)/i;
             if (regexLink.test(msg.text)) {
@@ -56,15 +83,11 @@ async function initAdminBot() {
         }
     });
 
-    // Dar Bienvenida
     bot.on('new_chat_members', async (msg) => {
         const chatId = msg.chat.id;
         const newMembers = msg.new_chat_members;
-        
         for (const member of newMembers) {
-            // Ignorar si es el propio bot
             if (member.id === bot.botInfo?.id) continue;
-            
             const text = activeConfig.welcomeText.replace('{name}', member.first_name);
             try {
                 if (activeConfig.welcomePhotoUrl && activeConfig.welcomePhotoUrl.startsWith('http')) {
@@ -72,19 +95,13 @@ async function initAdminBot() {
                 } else {
                     await bot.sendMessage(chatId, text);
                 }
-            } catch(e) { console.error('Error enviando bienvenida:', e.message); }
+            } catch(e) {}
         }
     });
 
-    // Auto Aprobar solicitudes de union
     bot.on('chat_join_request', async (request) => {
         if (activeConfig.autoApprove) {
-            try {
-                await bot.approveChatJoinRequest(request.chat.id, request.from.id);
-                console.log(`[TG ADMIN] Solicitud aprobada para ${request.from.first_name}`);
-            } catch (e) {
-                console.error('[TG ADMIN] Error aprobando solicitud:', e.message);
-            }
+            try { await bot.approveChatJoinRequest(request.chat.id, request.from.id); } catch (e) {}
         }
     });
 }
@@ -93,5 +110,5 @@ module.exports = {
     initAdminBot, 
     TGConfig, 
     getActiveConfig: () => activeConfig, 
-    updateActiveConfig: (c) => activeConfig = c 
+    updateActiveConfig: (c) => { activeConfig = c; restartBroadcast(); } 
 };
