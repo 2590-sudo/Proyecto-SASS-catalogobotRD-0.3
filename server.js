@@ -47,6 +47,12 @@ setTimeout(() => tgAdmin.initAdminBot(), 5000); // Iniciar despues de 5 segundos
 // --- BOT MOTIVADOR ALTAMIRA ---
 const altamiraBot = require('./telegram_bot_altamira');
 setTimeout(() => altamiraBot.initAltamiraBot(), 6000); // Iniciar despues de 6 segundos
+
+// --- BOT DINAMIZADOR (COMUNIDAD Y PROMO) ---
+const promoBot = require('./telegram_bot_promo');
+setTimeout(() => promoBot.initPromoBot(), 7000); // Iniciar despues de 7 segundos
+// -------------------------------------------
+
 // ------------------------------
 
 // --------------------------------------
@@ -952,6 +958,28 @@ app.post('/api/altamira-send', async (req, res) => {
     }
 });
 // -----------------------------------------------
+
+
+// --- RUTAS PROMO BOT (DINAMIZADOR) ---
+app.post('/api/promo-send', async (req, res) => {
+    try {
+        const { text, photoUrl, photoBase64 } = req.body;
+        if (photoBase64) {
+            const matches = photoBase64.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+            if (!matches || matches.length !== 3) {
+                return res.status(400).json({ error: 'Formato de imagen invalido' });
+            }
+            const buffer = Buffer.from(matches[2], 'base64');
+            await promoBot.sendPromoMessage(text, buffer, true);
+        } else {
+            await promoBot.sendPromoMessage(text, photoUrl, false);
+        }
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// -------------------------------------
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
