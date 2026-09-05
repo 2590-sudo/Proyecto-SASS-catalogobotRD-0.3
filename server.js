@@ -43,6 +43,12 @@ telegramBot.on('message', async (msg) => {
 // --- BOT DE ADMINISTRACION TELEGRAM ---
 const tgAdmin = require('./telegram_bot_admin');
 setTimeout(() => tgAdmin.initAdminBot(), 5000); // Iniciar despues de 5 segundos
+
+// --- BOT MOTIVADOR ALTAMIRA ---
+const altamiraBot = require('./telegram_bot_altamira');
+setTimeout(() => altamiraBot.initAltamiraBot(), 6000); // Iniciar despues de 6 segundos
+// ------------------------------
+
 // --------------------------------------
 
 const app = express();
@@ -924,6 +930,19 @@ async function reactivarSesiones() {
         console.error('[REACTIVAR] Error:', e.message);
     }
 }
+
+
+// --- RUTAS ALTAMIRA BOT (PAGOS Y MOTIVACION) ---
+app.post('/api/altamira-send', async (req, res) => {
+    try {
+        const { text, photoUrl } = req.body;
+        await altamiraBot.sendProofMessage(text, photoUrl);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// -----------------------------------------------
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
