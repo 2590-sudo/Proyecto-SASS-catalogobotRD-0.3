@@ -29,7 +29,6 @@ async function initAltamiraBot() {
         }
     } catch(e) { console.error('Error cargando config Altamira:', e.message); }
 
-    // Escuchar mensajes para capturar el ID del grupo
     bot.on('message', async (msg) => {
         if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
             const chatId = msg.chat.id.toString();
@@ -44,18 +43,21 @@ async function initAltamiraBot() {
     });
 }
 
-async function sendProofMessage(text, photoUrl) {
+async function sendProofMessage(text, photoData, isBuffer = false) {
     if (!bot) throw new Error("El bot Altamira no está encendido (revisa el Token).");
     if (!groupId) throw new Error("El bot no sabe a qué grupo enviar. Escribe cualquier cosa en el grupo para que Altamira lo detecte primero.");
     
-    if (photoUrl && photoUrl.trim() !== '') {
-        await bot.sendPhoto(groupId, photoUrl, { caption: text, parse_mode: 'HTML' });
+    if (photoData) {
+        if (isBuffer) {
+            await bot.sendPhoto(groupId, photoData, { caption: text, parse_mode: 'HTML' }, { filename: 'comprobante.jpg', contentType: 'image/jpeg' });
+        } else if (typeof photoData === 'string' && photoData.trim() !== '') {
+            await bot.sendPhoto(groupId, photoData, { caption: text, parse_mode: 'HTML' });
+        } else {
+            await bot.sendMessage(groupId, text, { parse_mode: 'HTML' });
+        }
     } else {
         await bot.sendMessage(groupId, text, { parse_mode: 'HTML' });
     }
 }
 
-module.exports = { 
-    initAltamiraBot,
-    sendProofMessage
-};
+module.exports = { initAltamiraBot, sendProofMessage };
