@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel Dinamizador - Comunidad y Motivación</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-top: 5px solid #007bff; }
+        h1 { color: #007bff; text-align: center; margin-bottom: 10px; }
+        p.subtitle { text-align: center; color: #666; margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; margin-bottom: 8px; color: #333; }
+        input[type="file"], input[type="text"], textarea { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 15px; background: white; }
+        textarea { height: 150px; resize: vertical; }
+        .preview-container { margin-top: 10px; text-align: center; display: none; }
+        .preview-container img { max-width: 100%; max-height: 200px; border-radius: 5px; border: 1px solid #ccc; }
+        button { width: 100%; padding: 14px; background-color: #007bff; color: white; border: none; border-radius: 5px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        .status { margin-top: 15px; text-align: center; font-weight: bold; display: none; padding: 10px; border-radius: 5px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .help-text { font-size: 13px; color: #666; margin-top: 5px; display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📣 Panel Dinamizador</h1>
+        <p class="subtitle">Anima al equipo y sube fotos motivacionales o de tareas</p>
+        
+        <div class="form-group">
+            <label for="messageText">Mensaje al Grupo</label>
+            <textarea id="messageText" placeholder="🚀 ¡Atención equipo! Subimos 3 nuevos videos. ¡Los primeros en completarlos ganan un bono extra!"></textarea>
+            <span class="help-text">Escribe aquí cualquier actualización, promoción o anuncio para mantener activa a la comunidad.</span>
+        </div>
+
+        <div class="form-group">
+            <label for="photoFile">Subir Imagen (Opcional)</label>
+            <input type="file" id="photoFile" accept="image/*" onchange="previewImage()">
+            <span class="help-text">Selecciona una imagen desde tu celular. Si no eliges ninguna, solo se enviará el texto.</span>
+            <div id="imagePreviewContainer" class="preview-container">
+                <img id="imagePreview" src="" alt="Vista previa">
+            </div>
+        </div>
+
+        <button id="sendBtn" onclick="sendToGroup()">📣 Publicar en el Grupo</button>
+        <div id="status" class="status"></div>
+    </div>
+
+    <script>
+        function previewImage() {
+            const file = document.getElementById('photoFile').files[0];
+            const previewContainer = document.getElementById('imagePreviewContainer');
+            const previewImage = document.getElementById('imagePreview');
+            
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previewImage.src = e.target.result;
+                    previewContainer.style.display = 'block';
+                }
+                reader.readAsDataURL(file);
+            } else {
+                previewContainer.style.display = 'none';
+                previewImage.src = '';
+            }
+        }
+
+        async function sendToGroup() {
+            const btn = document.getElementById('sendBtn');
+            const status = document.getElementById('status');
+            const text = document.getElementById('messageText').value;
+            const fileInput = document.getElementById('photoFile');
+            
+            btn.innerText = 'Subiendo imagen y publicando... ⏳';
+            btn.disabled = true;
+            status.style.display = 'none';
+            status.className = 'status';
+            
+            if (!text) {
+                status.innerText = '⚠️ El mensaje no puede estar vacío.';
+                status.classList.add('error');
+                status.style.display = 'block';
+                btn.innerText = '📣 Publicar en el Grupo';
+                btn.disabled = false;
+                return;
+            }
+
+            let photoBase64 = null;
+            if (fileInput.files && fileInput.files[0]) {
+                const file = fileInput.files[0];
+                photoBase64 = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = error => reject(error);
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            const payload = { text: text, photoBase64: photoBase64 };
+
+            try {
+                const res = await fetch('/api/promo-send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    status.innerText = '✅ ¡Mensaje publicado exitosamente!';
+                    status.classList.add('success');
+                    document.getElementById('messageText').value = '';
+                    fileInput.value = '';
+                    document.getElementById('imagePreviewContainer').style.display = 'none';
+                } else {
+                    status.innerText = '❌ Error: ' + (data.error || 'Desconocido');
+                    status.classList.add('error');
+                }
+            } catch (e) {
+                status.innerText = '❌ Error de conexión al servidor.';
+                status.classList.add('error');
+            }
+            
+            status.style.display = 'block';
+            btn.innerText = '📣 Publicar en el Grupo';
+            btn.disabled = false;
+        }
+    </script>
+</body>
+</html>
