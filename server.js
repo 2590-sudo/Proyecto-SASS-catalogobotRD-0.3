@@ -935,8 +935,17 @@ async function reactivarSesiones() {
 // --- RUTAS ALTAMIRA BOT (PAGOS Y MOTIVACION) ---
 app.post('/api/altamira-send', async (req, res) => {
     try {
-        const { text, photoUrl } = req.body;
-        await altamiraBot.sendProofMessage(text, photoUrl);
+        const { text, photoUrl, photoBase64 } = req.body;
+        if (photoBase64) {
+            const matches = photoBase64.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+            if (!matches || matches.length !== 3) {
+                return res.status(400).json({ error: 'Formato de imagen invalido' });
+            }
+            const buffer = Buffer.from(matches[2], 'base64');
+            await altamiraBot.sendProofMessage(text, buffer, true);
+        } else {
+            await altamiraBot.sendProofMessage(text, photoUrl, false);
+        }
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
