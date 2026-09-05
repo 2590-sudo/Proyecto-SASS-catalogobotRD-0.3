@@ -39,12 +39,6 @@ telegramBot.on('message', async (msg) => {
 });
 // -----------------------
 
-
-// --- BOT DE ADMINISTRACION TELEGRAM ---
-const tgAdmin = require('./telegram_bot_admin');
-setTimeout(() => tgAdmin.initAdminBot(), 5000); // Iniciar despues de 5 segundos
-// --------------------------------------
-
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
@@ -925,39 +919,7 @@ async function reactivarSesiones() {
     }
 }
 
-
-// --- RUTAS DEL PANEL DE ADMINISTRACION TELEGRAM ---
-app.get('/api/tg-config', async (req, res) => {
-    try {
-        const conf = tgAdmin.getActiveConfig();
-        res.json(conf);
-    } catch (e) {
-        res.status(500).json({error: e.message});
-    }
-});
-
-app.post('/api/tg-config', async (req, res) => {
-    try {
-        const { welcomeText, welcomePhotoUrl, deleteLinks, autoApprove } = req.body;
-        let conf = await tgAdmin.TGConfig.findOne({});
-        if (!conf) conf = new tgAdmin.TGConfig();
-        
-        if (welcomeText !== undefined) conf.welcomeText = welcomeText;
-        if (welcomePhotoUrl !== undefined) conf.welcomePhotoUrl = welcomePhotoUrl;
-        if (deleteLinks !== undefined) conf.deleteLinks = deleteLinks;
-        if (autoApprove !== undefined) conf.autoApprove = autoApprove;
-        
-        await conf.save();
-        tgAdmin.updateActiveConfig(conf);
-        res.json({ success: true, config: conf });
-    } catch (e) {
-        res.status(500).json({error: e.message});
-    }
-});
-// --------------------------------------------------
-
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, async () => {
     console.log('=== INICIO ===');
     console.log('Node.js version:', process.version);
