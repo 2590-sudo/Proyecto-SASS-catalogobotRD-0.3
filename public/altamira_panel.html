@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Altamira2bot - RRHH y Pagos</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-top: 5px solid #28a745; }
+        h1 { color: #28a745; text-align: center; margin-bottom: 10px; }
+        p.subtitle { text-align: center; color: #666; margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; margin-bottom: 8px; color: #333; }
+        input[type="text"], textarea { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 15px; }
+        textarea { height: 150px; resize: vertical; }
+        button { width: 100%; padding: 14px; background-color: #28a745; color: white; border: none; border-radius: 5px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
+        button:hover { background-color: #218838; }
+        .status { margin-top: 15px; text-align: center; font-weight: bold; display: none; padding: 10px; border-radius: 5px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .help-text { font-size: 13px; color: #666; margin-top: 5px; display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>💸 Panel de Altamira</h1>
+        <p class="subtitle">Envia comprobantes de pago y motivación al grupo</p>
+        
+        <div class="form-group">
+            <label for="messageText">Mensaje / Descripción del Pago</label>
+            <textarea id="messageText" placeholder="✅ ¡Pago de 20 DOP enviado exitosamente a @Usuario!\n\nSigan viendo videos, ¡hay más tareas disponibles!"></textarea>
+            <span class="help-text">Usa este espacio para motivar y confirmar los pagos (acepta Emojis).</span>
+        </div>
+
+        <div class="form-group">
+            <label for="photoUrl">Enlace del Comprobante (Opcional)</label>
+            <input type="text" id="photoUrl" placeholder="https://ejemplo.com/captura-transferencia.jpg">
+            <span class="help-text">Pega el link de la captura de pantalla del banco. Si lo dejas vacío, solo enviará el texto.</span>
+        </div>
+
+        <button onclick="sendToGroup()">🚀 Enviar al Grupo Ahora</button>
+        <div id="status" class="status"></div>
+    </div>
+
+    <script>
+        async function sendToGroup() {
+            const btn = document.querySelector('button');
+            const status = document.getElementById('status');
+            
+            btn.innerText = 'Enviando...';
+            btn.disabled = true;
+            status.style.display = 'none';
+            status.className = 'status';
+            
+            const payload = {
+                text: document.getElementById('messageText').value,
+                photoUrl: document.getElementById('photoUrl').value
+            };
+
+            if (!payload.text) {
+                status.innerText = '⚠️ El mensaje no puede estar vacío.';
+                status.classList.add('error');
+                status.style.display = 'block';
+                btn.innerText = '🚀 Enviar al Grupo Ahora';
+                btn.disabled = false;
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/altamira-send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    status.innerText = '✅ ¡Mensaje enviado al grupo exitosamente!';
+                    status.classList.add('success');
+                    document.getElementById('messageText').value = '';
+                    document.getElementById('photoUrl').value = '';
+                } else {
+                    status.innerText = '❌ Error: ' + (data.error || 'Desconocido');
+                    status.classList.add('error');
+                }
+            } catch (e) {
+                status.innerText = '❌ Error de conexión al servidor.';
+                status.classList.add('error');
+            }
+            
+            status.style.display = 'block';
+            btn.innerText = '🚀 Enviar al Grupo Ahora';
+            btn.disabled = false;
+        }
+    </script>
+</body>
+</html>
